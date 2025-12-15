@@ -1,0 +1,10 @@
+<Link to="/" className="flex items-center gap-2">
+  <img
+    src={logo}
+    alt="Questivo"
+    className="h-8 w-8 object-contain"
+  />
+  <span className="text-xl font-bold text-slate-900">
+    Questivo
+  </span>
+</Link>
