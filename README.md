@@ -1,5 +1,7 @@
 # 🎓 Questivo - AI-Powered Mock Test Platform
 
+🌐 **Live Demo:** https://questivo.vercel.app/
+
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Node](https://img.shields.io/badge/node-v20%2B-green.svg)
 ![React](https://img.shields.io/badge/react-v19-blue.svg)
@@ -194,4 +196,5 @@ FRONTEND_URL="http://localhost:5173"
 
 ## 📜 License
 MIT License
+
 
