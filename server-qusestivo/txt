@@ -1,0 +1,11 @@
+project-root/
+  .env
+  package.json
+  src/
+    server.js
+    db.js
+    questionGenerator.js   // tumhara existing file (thoda adjust)
+    routes/
+      testRoutes.js
+    controllers/
+      testController.js 
