@@ -60,10 +60,27 @@ const Signup = () => {
   });
 
   // --- CHECK AUTH ON MOUNT ---
-  useEffect(() => {
-    const token = localStorage.getItem("auth_token");
-    if (token) navigate("/");
-  }, [navigate]);
+ useEffect(() => {
+  let mounted = true;
+
+  const checkAuth = async () => {
+    try {
+      const res = await api.get("/api/auth/me");
+      if (mounted && res.data?.user) {
+        navigate("/", { replace: true });
+      }
+    } catch {
+      // Not logged in → stay on signup/login page
+    }
+  };
+
+  checkAuth();
+
+  return () => {
+    mounted = false;
+  };
+}, [navigate]);
+
 
   // --- HANDLERS ---
 
@@ -110,7 +127,7 @@ const Signup = () => {
       email: data.email,
       password: data.password,
     });
-    if (res.data.success) finalizeAuth(res.data.token);
+    if (res.data.success) finalizeAuth();
   };
 
   const handleSendLoginOtp = async () => {
@@ -126,7 +143,7 @@ const Signup = () => {
       email: data.email,
       otp: data.otp,
     });
-    if (res.data.success) finalizeAuth(res.data.token);
+    if (res.data.success) finalizeAuth();
   };
 
   const handleSignupInit = async () => {
@@ -146,7 +163,7 @@ const Signup = () => {
       email: data.email,
       otp: data.otp,
     });
-    if (res.data.success) finalizeAuth(res.data.token);
+    if (res.data.success) finalizeAuth();
   };
 
   // --- FORGOT PASSWORD HANDLERS ---
@@ -195,14 +212,11 @@ const handleForgotPassVerify = async () => {
 
 
   // --- FINALIZATION ---
-  const finalizeAuth = (token?: string) => {
-    toast.success("Welcome!");
-    if (token) {
-        localStorage.setItem("auth_token", token);
-        window.dispatchEvent(new Event("storage"));
-    }
-    setTimeout(() => navigate("/"), 500);
-  };
+  const finalizeAuth = () => {
+  toast.success("Welcome!");
+  setTimeout(() => navigate("/", { replace: true }), 500);
+};
+
 
   // --- FORM SUBMISSION ---
   const handleSubmit = async (e: FormEvent) => {
