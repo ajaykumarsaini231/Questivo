@@ -1,14 +1,18 @@
-import { perplexity } from "./openaiClient.js";
+import Groq from "groq-sdk";
+
+if (!process.env.GROQ_API_KEY) {
+  throw new Error("GROQ_API_KEY is missing in .env file");
+}
+
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+
+// ✅ MODEL: Llama 3.3 (High Quality, Fast)
+const MODEL_NAME = "llama-3.3-70b-versatile"; 
 
 /* ================= CONFIGURATION ================= */
-
-const MODEL_ID = "sonar-pro";
-const CONCURRENCY_LIMIT = 7;     
-const MIN_BATCH_SIZE = 3;        
-const MAX_BATCH_SIZE = 20;       
-const MAX_RETRIES = 2;           
-const TOKENS_PER_QUESTION = 100;
-/* ================= MAIN ENTRY POINT ================= */
+// Reduced batch size to stay under rate limits (Safe Zone)
+const MAX_BATCH_SIZE = 15; 
+const MAX_TOTAL_RETRIES = 5; 
 
 export async function generateQuestionsAgent({
   examType,
@@ -18,382 +22,198 @@ export async function generateQuestionsAgent({
   sessionType,
   medium = "English",
 }) {
-  // Validation
-  if (!examType) throw new Error("examType is required");
-  if (!Array.isArray(topics) || topics.length === 0) {
-    throw new Error("topics[] is required");
-  }
-
-  // Normalize Count
   let totalTarget = Number(numQuestions) || 10;
-  if (totalTarget < 1) totalTarget = 1;
   if (totalTarget > 100) totalTarget = 100;
 
-  // Plan Batches
-  let batches = planBatchesByTopic(topics, totalTarget);
-  batches = mergeSmallBatches(batches, MIN_BATCH_SIZE);
-  
-  console.log(`[Generator] Planned ${batches.length} batches for ${totalTarget} questions using ${MODEL_ID}.`);
+  console.log(`[Groq] Generating Questions (Token Saver Mode). Target: ${totalTarget}`);
 
-  // Task Creation
-  const tasks = batches.map((batch, idx) => () =>
-    fetchBatchWithRetry({
-      examType,
-      topics: batch.topics,
-      count: batch.count,
-      difficulty,
-      sessionType,
-      medium,
-      batchIndex: idx + 1,
-    })
-  );
-
-  // Parallel Execution
-  const batchResults = await asyncPool(CONCURRENCY_LIMIT, tasks);
-  let allQuestions = batchResults.flat();
-
-  // Deduplication Phase 1
-  allQuestions = deduplicateQuestions(allQuestions);
-
-  // Final Guarantee Loop (Force Fill)
+  let allQuestions = [];
   let loopCount = 0;
-  const MAX_LOOP_SAFETY = 5;
+  const MAX_LOOPS = MAX_TOTAL_RETRIES + 5; 
 
-  while (allQuestions.length < totalTarget && loopCount < MAX_LOOP_SAFETY) {
-    const missing = totalTarget - allQuestions.length;
-    console.log(`[Generator] Loop ${loopCount + 1}: Missing ${missing} questions. Force filling...`);
+  while (allQuestions.length < totalTarget && loopCount < MAX_LOOPS) {
+    const needed = totalTarget - allQuestions.length;
+    // Ask for fewer questions at once to save per-minute tokens
+    const currentBatchSize = Math.min(needed, MAX_BATCH_SIZE);
+
+    if (currentBatchSize <= 0) break;
 
     try {
-      const leastUsedTopic = getLeastUsedTopic(allQuestions, topics);
-      const requestCount = Math.max(missing, 5); // Request min 5 to provide context
-
-      const filler = await fetchBatchWithRetry({
+      const batchQuestions = await fetchBatchFromGroq({
         examType,
-        topics: [leastUsedTopic],
-        count: requestCount,
+        topics,
+        count: currentBatchSize,
         difficulty,
-        sessionType,
-        medium,
-        batchIndex: `FORCE-FILL-${loopCount}`,
-        temperature: 0.7,
+        medium
       });
 
-      if (filler.length === 0) {
-          console.warn("[Generator] Force fill returned 0. Retrying...");
+      const uniqueBatch = deduplicateAgainstList(batchQuestions, allQuestions);
+      
+      if (uniqueBatch.length > 0) {
+        allQuestions.push(...uniqueBatch);
+        console.log(`✅ Got ${uniqueBatch.length} questions.`);
       }
 
-      allQuestions.push(...filler);
-      allQuestions = deduplicateQuestions(allQuestions);
-      
-    } catch (e) {
-      console.warn(`[Generator] Loop ${loopCount} failed:`, e.message);
+      // 🛑 CRITICAL: Wait 3 seconds to reset "Tokens per Minute" counter
+      console.log("⏳ Cooling down for rate limit...");
+      await new Promise(r => setTimeout(r, 3000));
+
+    } catch (err) {
+      console.error(`❌ Batch Failed:`, err.message);
+      // On error, wait longer (5s)
+      await new Promise(r => setTimeout(r, 5000));
     }
-    
     loopCount++;
   }
 
-  // Final Normalization
-  return allQuestions.slice(0, totalTarget).map((q, i) => ({
+  const finalQuestions = deduplicateQuestions(allQuestions).slice(0, totalTarget);
+  return finalQuestions.map((q, i) => ({
     ...q,
-    question_text: `Question ${i + 1}: ${q.question_text.replace(/^(Question|प्रश्न)\s+\d+[:\-\s]*/i, "").trim()}`,
+    question_text: `Question ${i + 1}: ${q.question_text}`,
   }));
 }
 
-/* ================= HELPER: DEDUPLICATION ================= */
+/* ================= COMPRESSED PROMPT (TOKEN SAVER) ================= */
+
+async function fetchBatchFromGroq({ examType, topics, count, difficulty, medium }) {
+  
+  // 🔥 COMPRESSED PROMPT (Saves ~40% Tokens)
+  // We removed lengthy examples but kept strict rules.
+  const systemPrompt = `
+ACT: Chief Examiner for competitive exams (${examType}).
+GOAL: Create ${count} TOUGH, multi-step MCQs to filter top 1% candidates.
+TOPICS: ${topics.join(", ")}
+LEVEL: ${difficulty} (Very Hard)
+LANG: ${medium}
+
+⛔ RULES:
+1. NO direct "What is X?" questions.
+2. Options MUST be close distractors (e.g. 10.2 vs 10.5).
+3. REQUIRED TYPES: Statement Analysis (I, II, III), Assertion-Reason, Match Columns, Scenario.
+
+FORMAT (STRICT PLAIN TEXT, Separator: "---"):
+Question: <Text>
+Topic: <Topic>
+A) <Opt>
+B) <Opt>
+C) <Opt>
+D) <Opt>
+Correct: <A/B/C/D>
+Explanation: <Reasoning>
+---
+`;
+
+  try {
+    const completion = await groq.chat.completions.create({
+      messages: [
+        { role: "system", content: systemPrompt },
+        { 
+            role: "user", 
+            // Very short user prompt to save tokens
+            content: `Generate ${count} hard questions now.` 
+        }
+      ],
+      model: MODEL_NAME,
+      temperature: 0.5, 
+      max_tokens: 4000, // Reduced slightly to force conciseness
+      stop: ["<END_OF_BATCH>"], 
+    });
+
+    const raw = completion.choices[0]?.message?.content || "";
+    return parseBatchQuestions(raw, { examType, difficulty, defaultTopic: topics[0], validTopics: topics });
+
+  } catch (error) {
+    throw error;
+  }
+}
+
+/* ================= PARSER (Standard) ================= */
+
+function parseBatchQuestions(text, { examType, difficulty, defaultTopic, validTopics }) {
+  let cleanText = text.replace(/\*\*/g, "").replace(/Here are.*?:\n/i, "");
+  
+  let rawBlocks = cleanText.split("---");
+  if (rawBlocks.length < 2) rawBlocks = cleanText.split(/Question:/i);
+  
+  rawBlocks = rawBlocks.filter(b => b.trim().length > 20);
+
+  const parsed = [];
+  for (const block of rawBlocks) {
+    const lines = block.split("\n").map(l => l.trim()).filter(Boolean);
+    
+    let qText = "";
+    const qLineIndex = lines.findIndex(l => /^(Question|Q|प्रश्न)[:\-\.]/i.test(l));
+    
+    if (qLineIndex !== -1) {
+        qText = lines[qLineIndex].replace(/^(Question|Q|प्रश्न)[:\-\.]\s*/i, "").trim();
+        qText = qText.replace(/^\d+[\.:\)]\s*/, "");
+    } else if (lines.length > 0) {
+        qText = lines[0].replace(/^\d+[\.:\)]\s*/, "");
+    }
+
+    let topic = defaultTopic;
+    let optA="", optB="", optC="", optD="", correct="", exp="";
+
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+
+        if (line.match(/^Topic:/i)) {
+            let extractedTopic = line.replace(/^Topic:\s*/i, "").trim();
+            if (validTopics && validTopics.some(t => extractedTopic.toLowerCase().includes(t.toLowerCase()))) {
+                topic = extractedTopic;
+            } else {
+                topic = defaultTopic;
+            }
+        }
+        else if (/^A[\)\.\:\-\s]/i.test(line)) optA = line.replace(/^A[\)\.\:\-\s]\s*/i, "");
+        else if (/^B[\)\.\:\-\s]/i.test(line)) optB = line.replace(/^B[\)\.\:\-\s]\s*/i, "");
+        else if (/^C[\)\.\:\-\s]/i.test(line)) optC = line.replace(/^C[\)\.\:\-\s]\s*/i, "");
+        else if (/^D[\)\.\:\-\s]/i.test(line)) optD = line.replace(/^D[\)\.\:\-\s]\s*/i, "");
+        else if (/^(Correct|Ans|Answer|Correct Answer)/i.test(line)) {
+            const m = line.match(/\b([A-D])\b/i);
+            if (m) correct = m[1].toUpperCase();
+        }
+        else if (/^(Explanation|Exp|Reason)/i.test(line)) {
+            exp = line.replace(/^(Explanation|Exp|Reason)[:\-\.]\s*/i, "");
+        }
+    }
+
+    if (qText && optA && optB && correct) {
+      parsed.push({
+        exam_type: examType,
+        topic: topic, 
+        difficulty: difficulty,
+        question_text: qText,
+        option_a: optA,
+        option_b: optB,
+        option_c: optC,
+        option_d: optD,
+        correct_option: correct,
+        explanation: exp || "See solution."
+      });
+    }
+  }
+  return parsed;
+}
 
 function deduplicateQuestions(questions) {
   const seen = new Set();
   return questions.filter((q) => {
-    // Key based on Question + Option A + Option B (First 160 chars)
-    const content = `${q.question_text} ${q.option_a} ${q.option_b}`;
-    const key = content.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 160);
-    
+    const key = q.question_text.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 80); 
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
 }
 
-/* ================= HELPER: TOPIC BALANCER ================= */
-
-function getLeastUsedTopic(currentQuestions, allTopics) {
-    const counts = {};
-    allTopics.forEach(t => counts[t] = 0); 
-    
-    currentQuestions.forEach(q => {
-        const t = q.topic || allTopics[0];
-        if (counts[t] !== undefined) counts[t]++;
+function deduplicateAgainstList(newBatch, existingList) {
+    const existingKeys = new Set(existingList.map(q => 
+        q.question_text.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 80)
+    ));
+    return newBatch.filter(q => {
+        const key = q.question_text.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 80);
+        if (existingKeys.has(key)) return false;
+        existingKeys.add(key);
+        return true;
     });
-
-    const sorted = [...allTopics].sort((a, b) => counts[a] - counts[b]);
-    return sorted[0];
-}
-
-/* ================= BATCH PLANNER + MERGER ================= */
-
-function planBatchesByTopic(topics, total) {
-  const batches = [];
-  const perTopic = Math.floor(total / topics.length);
-  let remainder = total % topics.length;
-
-  for (const topic of topics) {
-    let count = perTopic + (remainder > 0 ? 1 : 0);
-    if (remainder > 0) remainder--;
-    if (count === 0) continue;
-
-    while (count > 0) {
-      const size = Math.min(count, MAX_BATCH_SIZE);
-      batches.push({ topics: [topic], count: size });
-      count -= size;
-    }
-  }
-  return batches;
-}
-
-function mergeSmallBatches(batches, minSize) {
-    if (batches.length === 0) return [];
-    
-    const optimized = [];
-    let current = batches[0];
-
-    for (let i = 1; i < batches.length; i++) {
-        const next = batches[i];
-        if (current.count < minSize) {
-            current.count += next.count;
-        } else {
-            optimized.push(current);
-            current = next;
-        }
-    }
-    
-    if (current.count < minSize && optimized.length > 0) {
-        const last = optimized[optimized.length - 1];
-        last.count += current.count;
-    } else {
-        optimized.push(current);
-    }
-
-    return optimized;
-}
-
-/* ================= ASYNC POOL ================= */
-
-async function asyncPool(limit, tasks) {
-  const results = [];
-  const executing = [];
-
-  for (const task of tasks) {
-    const p = Promise.resolve().then(task);
-    results.push(p);
-
-    if (limit <= tasks.length) {
-      const e = p.then(() => {
-        const idx = executing.indexOf(e);
-        if (idx !== -1) executing.splice(idx, 1);
-      });
-      executing.push(e);
-
-      if (executing.length >= limit) {
-        await Promise.race(executing);
-      }
-    }
-  }
-  return Promise.all(results);
-}
-
-/* ================= RETRY LOGIC ================= */
-
-async function fetchBatchWithRetry(params) {
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      const questions = await fetchBatch(params);
-      
-      if (questions.length > 0) {
-         return questions;
-      }
-      
-      throw new Error("Generated 0 valid questions");
-
-    } catch (err) {
-      if (attempt === MAX_RETRIES) return []; 
-      await new Promise((r) => setTimeout(r, 500 * (2 ** (attempt - 1))));
-    }
-  }
-  return [];
-}
-
-/* ================= SINGLE BATCH CALL ================= */
-
-async function fetchBatch({
-  examType,
-  topics,
-  count,
-  difficulty,
-  sessionType,
-  medium,
-  batchIndex,
-  temperature = 0.6 
-}) {
-  const topicsList = topics.join(", ");
-  const dynamicTokens = Math.min(4000, 600 + (count * TOKENS_PER_QUESTION)); 
-
-  const adjustedTemp = (medium === "Hindi" || medium === "Hinglish") ? 0.5 : temperature;
-
-  const systemPrompt = `
-You are a senior exam question-setter. Generate EXACTLY ${count} MCQs.
-
-RULES:
-1. Count: EXACTLY ${count} questions.
-2. Topics: ${topicsList}
-3. Difficulty: ${difficulty}
-4. Language: ${medium}
-5. No Markdown (*, **). Plain text only.
-
-OUTPUT FORMAT (STRICT):
-Question X:
-<Question Text MUST be on this new line>
-A) [Option A text]
-B) [Option B text]
-C) [Option C text]
-D) [Option D text]
-Correct: <A/B/C/D>
-Explanation: <Text>
-`.trim();
-
-  const userPrompt = `Generate batch ${batchIndex} with ${count} questions.`;
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 45000); 
-
-  try {
-    const res = await perplexity.post("/chat/completions", {
-      model: MODEL_ID, 
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ],
-      max_tokens: dynamicTokens,
-      temperature: adjustedTemp,
-    }, { signal: controller.signal });
-    
-    clearTimeout(timeoutId);
-
-    const raw = res.data?.choices?.[0]?.message?.content || "";
-    const cleanRaw = stripReasoning(raw); 
-
-    return parseQuestionsFromText(cleanRaw, { 
-      examType,
-      defaultDifficulty: difficulty,
-      maxQuestions: count,
-      medium,
-      defaultTopic: topics[0] || "General"
-    });
-
-  } catch (error) {
-    clearTimeout(timeoutId);
-    console.error(`[API Error] Batch ${batchIndex}:`, error.message);
-    throw error;
-  }
-}
-
-/* ================= ARTIFACT CLEANER ================= */
-
-function stripReasoning(text) {
-  if (!text) return "";
-  
-  return text
-    .replace(/<think>[\s\S]*?<\/think>/gi, "")
-    .replace(/^(Here are|I need to|Let me|Generating|Sure|Ok|Okay).*?(?=(Question|Q|प्रश्न)\s*\d+)/is, "")
-    .replace(/^(मुझे|मैं|हमें|आवश्यकताएँ|आउटपुट|प्रश्नों).*?(?=(Question|Q|प्रश्न)\s*\d+)/is, "")
-    .trim();
-}
-
-/* ================= PARSER ================= */
-
-function parseQuestionsFromText(text, { examType, defaultDifficulty, maxQuestions, medium, defaultTopic }) {
-  let body = text.replace(/\*\*/g, "").replace(/\*/g, ""); 
-
-  const splitRegex = /(?:Question|Q|प्रश्न)\s*\d+[:\-\.]*/gi;
-  const parts = body.split(splitRegex);
-
-  if (parts.length > 0 && !parts[0].includes("A)")) parts.shift();
-
-  const results = [];
-
-  for (const block of parts) {
-    if (results.length >= maxQuestions) break;
-
-    const lines = block.split("\n").map(l => l.trim()).filter(Boolean);
-    if (lines.length < 3) continue;
-
-    let questionTextLines = [];
-    let optionStartIndex = -1;
-
-    for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        if (/^A[\)\.]/i.test(line) || /^\[A\]/i.test(line)) {
-            optionStartIndex = i;
-            break;
-        }
-        
-        const isMetadata = line.startsWith("(") && line.endsWith(")");
-        const isHeader = /^(Question|Q|प्रश्न)\s*\d+/i.test(line);
-
-        if (!isMetadata && !isHeader) {
-            questionTextLines.push(line);
-        }
-    }
-
-    let questionText = questionTextLines.join(" ");
-    
-    if (!questionText && lines.length > 0) {
-        questionText = lines[0].replace(/^\(.*\)$/, "").trim(); 
-    }
-
-    // Skip Planning Leakage
-    if (/I need to|Let me break|requirements|out loud|thinking|मुझे|आवश्यक|आउटपुट|मैं सोच/i.test(questionText)) {
-       continue;
-    }
-
-    let optionA="", optionB="", optionC="", optionD="", correct="", exp="";
-
-    if (optionStartIndex !== -1) {
-        for (let i = optionStartIndex; i < lines.length; i++) {
-            const line = lines[i];
-            
-            if (/^A[\)\.\]]/i.test(line)) optionA = line.replace(/^A[\)\.\]]\s*/i, "");
-            else if (/^B[\)\.\]]/i.test(line)) optionB = line.replace(/^B[\)\.\]]\s*/i, "");
-            else if (/^C[\)\.\]]/i.test(line)) optionC = line.replace(/^C[\)\.\]]\s*/i, "");
-            else if (/^D[\)\.\]]/i.test(line)) optionD = line.replace(/^D[\)\.\]]\s*/i, "");
-            
-            else if (/^(Correct|Ans|Answer|Right Answer|सही उत्तर)/i.test(line)) {
-                const m = line.match(/\b([A-D])\b/i);
-                if (m) correct = m[1].toUpperCase();
-            }
-            else if (/^(Explanation|Exp|Reason|व्याख्या)/i.test(line)) {
-                exp = line.replace(/^(Explanation|Exp|Reason|व्याख्या)[:\-\s]*/i, "");
-            }
-        }
-    }
-
-    // Validation
-    const validOptionsCount = [optionA, optionB, optionC, optionD].filter(Boolean).length;
-    const wordCount = questionText.split(/\s+/).length;
-
-    if (validOptionsCount >= 3 && correct && wordCount >= 3) {
-      results.push({
-        exam_type: examType,
-        topic: defaultTopic,
-        difficulty: defaultDifficulty,
-        question_text: questionText, 
-        option_a: optionA,
-        option_b: optionB,
-        option_c: optionC,
-        option_d: optionD,
-        correct_option: correct,
-        explanation: exp || "Explanation provided in solution.",
-      });
-    }
-  }
-  return results;
 }
