@@ -7,7 +7,7 @@ import topicRoutes from "./src/routes/topicRoutes.js";
 import cors from "cors";
 import authrouter from "./src/routes/auth.routes.js"
 import cookieParser from "cookie-parser";
-
+import adminRoutes from "./src/routes/adminRoutes.js"
 import userroter from './src/routes/userRoutes.js'
 
 dotenv.config();
@@ -33,6 +33,8 @@ app.use("/api/category", categoryRoutes);
 app.use("/api/cate_topics", topicRoutes);
 app.use("/api/auth", authrouter );
 app.use("/api/user", userroter );
+app.use("/api/admin", adminRoutes);
+
 
 // import prisma from "./src/prismaClient.js";
 

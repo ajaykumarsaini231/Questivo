@@ -1,4 +1,4 @@
-import  { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import type { ChangeEvent, FormEvent } from "react";
 
 import axios from "axios";
@@ -7,6 +7,9 @@ import { useNavigate } from "react-router-dom";
 import { FcGoogle } from "react-icons/fc";
 import { FaFacebook } from "react-icons/fa";
 import { motion } from "framer-motion";
+
+// 1. IMPORT GOOGLE HOOK
+import { useGoogleLogin } from "@react-oauth/google"; 
 
 /* ================= TYPES ================= */
 
@@ -19,7 +22,7 @@ interface AuthData {
   email: string;
   password?: string;
   otp?: string;
-  newPassword?: string; // Added for reset flow
+  newPassword?: string;
 }
 
 interface ApiResponse {
@@ -60,30 +63,24 @@ const Signup = () => {
   });
 
   // --- CHECK AUTH ON MOUNT ---
- useEffect(() => {
-  let mounted = true;
-
-  const checkAuth = async () => {
-    try {
-      const res = await api.get("/api/auth/me");
-      if (mounted && res.data?.user) {
-        navigate("/", { replace: true });
+  useEffect(() => {
+    let mounted = true;
+    const checkAuth = async () => {
+      try {
+        const res = await api.get("/api/auth/me");
+        if (mounted && res.data?.user) {
+          navigate("/", { replace: true });
+        }
+      } catch {
+        // Not logged in
       }
-    } catch {
-      // Not logged in → stay on signup/login page
-    }
-  };
-
-  checkAuth();
-
-  return () => {
-    mounted = false;
-  };
-}, [navigate]);
+    };
+    checkAuth();
+    return () => { mounted = false; };
+  }, [navigate]);
 
 
   // --- HANDLERS ---
-
   const handleChange = (e: ChangeEvent<HTMLInputElement>) => {
     setData({ ...data, [e.target.name]: e.target.value });
   };
@@ -110,18 +107,36 @@ const Signup = () => {
     setData((prev) => ({ ...prev, otp: "", password: "" }));
   };
 
-  const handleGoogleAuth = () => {
-    toast.loading("Redirecting to Google...");
-    window.open(`${API_BASE}/api/auth/oauth/google`, "_self");
-  };
+  // 2. GOOGLE LOGIN LOGIC
+  // This function opens the popup, gets the token, and sends it to your backend
+  const loginWithGoogle = useGoogleLogin({
+    onSuccess: async (tokenResponse) => {
+      try {
+        // Send the access token to your backend controller
+        // IMPORTANT: Ensure your backend route is exactly '/api/auth/google'
+        const res = await api.post("/api/auth/oauth/google", { 
+          accessToken: tokenResponse.access_token 
+        });
+
+        if (res.data.success) {
+          finalizeAuth();
+        }
+      } catch (err) {
+        console.error(err);
+        toast.error("Google Login Failed");
+      }
+    },
+    onError: () => {
+      toast.error("Google Login Failed");
+    }
+  });
 
   const handleFacebookAuth = () => {
     toast.loading("Redirecting to Facebook...");
-    // window.open(`${API_BASE}/api/auth/oauth/facebook`, "_self");
+    // Facebook impl would go here
   };
 
   // --- API CALLS ---
-
   const handlePasswordLogin = async () => {
     const res = await api.post<ApiResponse>("/api/auth/signin", {
       email: data.email,
@@ -175,48 +190,35 @@ const Signup = () => {
     }
   };
 
+  const handleForgotPassVerify = async () => {
+    if (!data.otp) return toast.error("Please enter OTP");
+    if (!data.newPassword) return toast.error("Please enter new password");
 
+    const payload = {
+      email: data.email.trim().toLowerCase(),
+      otp: String(data.otp),   
+      newPassword: data.newPassword,
+    };
 
-const handleForgotPassVerify = async () => {
-  if (!data.otp) {
-    toast.error("Please enter OTP");
-    return;
-  }
+    const res = await api.post<ApiResponse>(
+      "/api/auth/password/reset/verify",
+      payload
+    );
 
-  if (!data.newPassword) {
-    toast.error("Please enter new password");
-    return;
-  }
-
-  const payload = {
-    email: data.email.trim().toLowerCase(),
-    otp: String(data.otp),   // ✅ safe conversion
-    newPassword: data.newPassword,
+    if (res.data.success) {
+      toast.success("Password reset successful! Please login.");
+      setVariant("LOGIN");
+      setLoginMethod("PASSWORD");
+      setStep(1);
+      setData(prev => ({ ...prev, password: "", otp: "", newPassword: "" }));
+    }
   };
-
-  console.log("VERIFY PAYLOAD:", payload);
-
-  const res = await api.post<ApiResponse>(
-    "/api/auth/password/reset/verify",
-    payload
-  );
-
-  if (res.data.success) {
-    toast.success("Password reset successful! Please login.");
-    setVariant("LOGIN");
-    setLoginMethod("PASSWORD");
-    setStep(1);
-    setData(prev => ({ ...prev, password: "", otp: "", newPassword: "" }));
-  }
-};
-
 
   // --- FINALIZATION ---
   const finalizeAuth = () => {
-  toast.success("Welcome!");
-  setTimeout(() => navigate("/", { replace: true }), 500);
-};
-
+    toast.success("Welcome!");
+    setTimeout(() => navigate("/", { replace: true }), 500);
+  };
 
   // --- FORM SUBMISSION ---
   const handleSubmit = async (e: FormEvent) => {
@@ -333,13 +335,13 @@ const handleForgotPassVerify = async () => {
                 {/* LOGIN OPTIONS LINKS */}
                 {variant === "LOGIN" && (
                   <div className="flex justify-between items-center mt-2 px-1">
-                     <button
-                      type="button"
-                      onClick={switchToForgotPass}
-                      className="text-xs font-medium text-gray-500 hover:text-gray-700 hover:underline"
-                    >
-                      Forgot Password?
-                    </button>
+                      <button
+                       type="button"
+                       onClick={switchToForgotPass}
+                       className="text-xs font-medium text-gray-500 hover:text-gray-700 hover:underline"
+                     >
+                       Forgot Password?
+                     </button>
                     <button
                       type="button"
                       onClick={toggleLoginMethod}
@@ -431,15 +433,16 @@ const handleForgotPassVerify = async () => {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <button onClick={handleGoogleAuth} className="flex items-center justify-center px-4 py-2.5 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors bg-white shadow-sm">
+              <div className="grid  gap-4">
+                {/* 3. ATTACH THE GOOGLE LOGIN TRIGGER */}
+                <button onClick={() => loginWithGoogle()} className="flex items-center justify-center px-4 py-2.5 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors bg-white shadow-sm">
                   <FcGoogle size={22} />
                   <span className="ml-2 text-sm font-medium text-gray-700">Google</span>
                 </button>
-                <button onClick={handleFacebookAuth} className="flex items-center justify-center px-4 py-2.5 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors bg-white shadow-sm">
+                {/* <button onClick={handleFacebookAuth} className="flex items-center justify-center px-4 py-2.5 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors bg-white shadow-sm">
                   <FaFacebook size={22} className="text-[#1877F2]" />
                   <span className="ml-2 text-sm font-medium text-gray-700">Facebook</span>
-                </button>
+                </button> */}
               </div>
             </motion.div>
           )}

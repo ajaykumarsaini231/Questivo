@@ -10,7 +10,10 @@ import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
 
 // --- CONFIG ---
-const API_BASE = "http://localhost:4000"; // Update port if needed
+const API_BASE = (typeof import.meta !== "undefined" && (import.meta as any).env?.VITE_API_URL) ||
+    (typeof process !== "undefined" && (process.env as any).NEXT_PUBLIC_API_URL) ||
+    (typeof process !== "undefined" && (process.env as any).REACT_APP_API_URL) ||
+    "http://localhost:4000"; // Update port if needed
 
 // --- TYPES ---
 interface UserProfile {

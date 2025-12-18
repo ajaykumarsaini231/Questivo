@@ -15,6 +15,7 @@ const seedModules = [
   "./test_neet.js",
   "./test_ssc.js",
   "./test_ssc_cgl.js",
+  "./test_gate_me.js",
 ];
 
 function promptYes(question) {

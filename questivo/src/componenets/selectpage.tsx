@@ -80,7 +80,6 @@ export default function GenerateTestPage() {
     "English",
     "Hindi",
     "Hinglish",
-    "Bilingual (English+Hindi)"
   ] as const;
   
   type Medium = typeof allowedMediums[number];

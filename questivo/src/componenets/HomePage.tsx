@@ -55,8 +55,9 @@ const HomePage: React.FC = () => {
   const navigate = useNavigate();
   
   const API_BASE =
-    (typeof import.meta !== "undefined" &&
-      (import.meta as any).env?.VITE_API_URL) ||
+    (typeof import.meta !== "undefined" && (import.meta as any).env?.VITE_API_URL) ||
+    (typeof process !== "undefined" && (process.env as any).NEXT_PUBLIC_API_URL) ||
+    (typeof process !== "undefined" && (process.env as any).REACT_APP_API_URL) ||
     "http://localhost:4000";
 
   const api = axios.create({
