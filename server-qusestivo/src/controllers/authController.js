@@ -578,9 +578,8 @@ export const getUserStats = async (req, res) => {
         if (percentage > bestScore) bestScore = percentage;
       }
 
-      // 👇👇👇 IMPORTANCE: This ID mapping is causing your error if missing
       return {
-        id: session.id, // <--- YE LINE MOST IMPORTANT HAI
+        id: session.id, 
         examName: session.examCategory?.name || session.examType,
         date: session.createdAt,
         score: percentage,
@@ -606,10 +605,6 @@ export const getUserStats = async (req, res) => {
 };
 
 
-
-/* =====================================================
-   CLEANUP — EXPIRED PENDING USERS
-===================================================== */
 
 const cleanExpiredPendingUsers = async () => {
   try {

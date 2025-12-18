@@ -139,7 +139,7 @@ const Header: React.FC = () => {
             href="/GenerateTestPage"
             className="text-sm text-slate-600 hover:text-indigo-600"
           >
-            Generate Test 
+            Generate Test
           </a>
         </nav>
 
@@ -223,15 +223,14 @@ const Header: React.FC = () => {
                 <BookOpen className="h-4 w-4" />
                 How it Works
               </a>
-
-               <a
-            href="/GenerateTestPage"
-            className="text-sm text-slate-600 hover:text-indigo-600"
-          >
-            <BookOpen className="h-4 w-4" />
-            Generate Test 
-          </a>
-
+              <a
+                href="/GenerateTestPage"
+                onClick={() => setIsMenuOpen(false)}
+                className="flex items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-slate-600 transition-colors hover:bg-indigo-50 hover:text-indigo-600"
+              >
+                <BookOpen className="h-4 w-4" />
+                Generate Test
+              </a>
             </div>
 
             {/* --- Divider --- */}

@@ -1,6 +1,6 @@
-// controllers/userController.js
 import prisma from "../prismaClient.js";
 
+// --- GET PROFILE ---
 export const getMyProfile = async (req, res) => {
   const userId = req.userId;
 
@@ -13,6 +13,9 @@ export const getMyProfile = async (req, res) => {
       authProvider: true,
       preferredMedium: true,
       createdAt: true,
+      // ✅ Ye do fields add kiye taaki frontend pe dikhe
+      bio: true,
+      photoUrl: true,
     },
   });
 
@@ -20,6 +23,7 @@ export const getMyProfile = async (req, res) => {
     return res.status(404).json({ success: false, message: "User not found" });
   }
 
+  // --- STATS CALCULATION (Same as before) ---
   const sessions = await prisma.testSession.findMany({
     where: { userId },
     orderBy: { createdAt: "desc" },
@@ -70,14 +74,30 @@ export const getMyProfile = async (req, res) => {
   });
 };
 
-/* ===== Update Preferred Medium ===== */
-export const updateMedium = async (req, res) => {
-  const { medium } = req.body;
+// --- ✅ NEW UPDATE FUNCTION ---
+export const updateProfile = async (req, res) => {
+  const userId = req.userId;
+  const { name, bio, photoUrl, preferredMedium } = req.body;
 
-  await prisma.user.update({
-    where: { id: req.userId },
-    data: { preferredMedium: medium },
-  });
+  try {
+    const updatedUser = await prisma.user.update({
+      where: { id: userId },
+      data: {
+        // Sirf wahi update hoga jo frontend se aayega
+        ...(name && { name }),
+        ...(bio && { bio }),
+        ...(photoUrl && { photoUrl }),
+        ...(preferredMedium && { preferredMedium }),
+      },
+    });
 
-  res.json({ success: true });
+    res.json({ 
+        success: true, 
+        message: "Profile updated successfully!",
+        user: updatedUser 
+    });
+  } catch (error) {
+    console.error("Update Error:", error);
+    res.status(500).json({ success: false, message: "Failed to update profile" });
+  }
 };

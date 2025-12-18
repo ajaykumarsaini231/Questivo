@@ -5,7 +5,7 @@ import axios from "axios";
 import toast, { Toaster } from "react-hot-toast";
 import { useNavigate } from "react-router-dom";
 import { FcGoogle } from "react-icons/fc";
-import { FaFacebook } from "react-icons/fa";
+// import { FaFacebook } from "react-icons/fa";
 import { motion } from "framer-motion";
 
 // 1. IMPORT GOOGLE HOOK
@@ -131,10 +131,10 @@ const Signup = () => {
     }
   });
 
-  const handleFacebookAuth = () => {
-    toast.loading("Redirecting to Facebook...");
-    // Facebook impl would go here
-  };
+  // const handleFacebookAuth = () => {
+  //   toast.loading("Redirecting to Facebook...");
+  //   // Facebook impl would go here
+  // };
 
   // --- API CALLS ---
   const handlePasswordLogin = async () => {
