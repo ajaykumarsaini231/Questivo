@@ -16,10 +16,22 @@ if (!GOOGLE_CLIENT_ID) {
   console.error("Google Client ID is missing! Check your .env file.");
 }
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
+ReactDOM.createRoot(
+  document.getElementById('root')!
+).render(
   <React.StrictMode>
-    <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
-      <App />
-    </GoogleOAuthProvider>
-  </React.StrictMode>,
+    {
+      GOOGLE_CLIENT_ID ? (
+        <GoogleOAuthProvider
+          clientId={
+            GOOGLE_CLIENT_ID
+          }
+        >
+          <App />
+        </GoogleOAuthProvider>
+      ) : (
+        <App />
+      )
+    }
+  </React.StrictMode>
 );

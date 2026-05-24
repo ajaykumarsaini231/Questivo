@@ -1,20 +1,17 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   BookOpen, 
-  BrainCircuit, 
   CheckCircle, 
   ChevronRight, 
   Search, 
   Sparkles, 
   Target, 
-  // Loader2,
-  X
+  X,
+  FileText,
 } from 'lucide-react';
 import axios from "axios";
 import { motion, AnimatePresence } from 'framer-motion';
-
-// import Header from './Header';
 
 // --- Types ---
 interface User {
@@ -54,11 +51,8 @@ const HomePage: React.FC = () => {
   // Hook for navigation
   const navigate = useNavigate();
   
-  const API_BASE =
-    (typeof import.meta !== "undefined" && (import.meta as any).env?.VITE_API_URL) ||
-    (typeof process !== "undefined" && (process.env as any).NEXT_PUBLIC_API_URL) ||
-    (typeof process !== "undefined" && (process.env as any).REACT_APP_API_URL) ||
-    "http://localhost:4000";
+ const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:4000';
+
 
   const api = axios.create({
     baseURL: API_BASE,
@@ -158,8 +152,6 @@ const HomePage: React.FC = () => {
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-900">
       
-      {/* {<Header/>} */}
-      
       <main>
         {/* ================= HERO SECTION ================= */}
         <section className="relative overflow-hidden pt-12 pb-20 lg:pt-24 lg:pb-32">
@@ -176,7 +168,7 @@ const HomePage: React.FC = () => {
                 )}
                 <div className="inline-flex items-center rounded-full border border-indigo-100 bg-indigo-50 px-3 py-1 text-sm font-medium text-indigo-600 mb-6">
                   <span className="flex h-2 w-2 rounded-full bg-indigo-600 mr-2"></span>
-                  New: AI-Generated Mock Tests for GATE 2025
+                  New: AI-Generated Mock Tests for JEE, GATE & SSC!
                 </div>
                 <h1 className="text-4xl font-extrabold tracking-tight text-slate-900 sm:text-5xl lg:text-6xl mb-6 leading-[1.15]">
                   Master Your Exams with <br/>
@@ -205,12 +197,31 @@ const HomePage: React.FC = () => {
           </div>
         </section>
 
-        {/* ================= SEARCH & STATS BAR (UPDATED) ================= */}
+        {/* ================= RESUME ATS SECTION (NEW) ================= */}
+        <section className="py-20 bg-white border-y border-slate-100">
+          <div className="container mx-auto px-4 md:px-6">
+            <div className="bg-slate-900 rounded-3xl p-8 md:p-16 flex flex-col md:flex-row items-center gap-12 shadow-2xl">
+              <div className="flex-1 space-y-6">
+                <h2 className="text-3xl font-bold text-white sm:text-4xl">Resume ATS Analyzer</h2>
+                <p className="text-slate-300 text-lg">Don't let your resume get rejected by ATS filters. Upload your resume to get an instant AI-powered audit, keyword improvements, and bullet-point rewrites.</p>
+                <button onClick={() => navigate("/resume_ats_score")} className="inline-flex items-center gap-2 bg-indigo-600 text-white font-bold px-8 py-4 rounded-xl hover:bg-indigo-500 transition-all">
+                  Analyze My Resume <FileText className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="w-full md:w-1/3 text-center p-8 bg-white/5 rounded-2xl border border-white/10">
+                 <FileText className="w-20 h-20 text-indigo-400 mx-auto mb-4" />
+                 <p className="text-white font-bold text-xl">Instant Audit</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* ================= SEARCH & STATS BAR ================= */}
         <section className="bg-white border-y border-slate-100 py-10 relative z-20">
           <div className="container mx-auto px-4 md:px-6">
             
             {/* Search Container */}
-            <div ref={searchRef} className="relative mx-auto max-w-3xl -mt-16 mb-12">
+            <div ref={searchRef} className="relative mx-auto max-w-3xl -mt-32 mb-12">
               <div className="relative rounded-xl bg-white p-2 shadow-xl ring-1 ring-slate-900/5 flex items-center gap-2">
                 <Search className="ml-4 h-5 w-5 text-slate-400 shrink-0" />
                 <input 
@@ -222,7 +233,6 @@ const HomePage: React.FC = () => {
                   className="flex-1 border-0 bg-transparent py-4 text-slate-900 placeholder:text-slate-400 focus:ring-0 focus:outline-none sm:text-sm"
                 />
                 
-                {/* Clear Button */}
                 {searchTerm && (
                   <button onClick={() => { setSearchTerm(""); setFilteredCategories([]); }} className="text-slate-400 hover:text-slate-600">
                     <X className="h-4 w-4" />
@@ -281,12 +291,6 @@ const HomePage: React.FC = () => {
                       <div className="p-6 text-center text-slate-500">
                         <Search className="h-8 w-8 mx-auto mb-2 text-slate-300" />
                         <p>No exams found matching "{searchTerm}"</p>
-                        <button 
-                          onClick={() => handleStartTest()} // Fallback to generic page
-                          className="mt-2 text-sm text-indigo-600 hover:underline"
-                        >
-                          Browse all exams instead
-                        </button>
                       </div>
                     )}
                   </motion.div>
@@ -311,7 +315,7 @@ const HomePage: React.FC = () => {
           </div>
         </section>
 
-        {/* ================= AVAILABLE TESTS / EXAMS (Bottom Grid) ================= */}
+        {/* ================= AVAILABLE TESTS / EXAMS ================= */}
         <section id="exams" className="py-20 bg-slate-50">
           <div className="container mx-auto px-4 md:px-6">
             <div className="mb-12 flex flex-col items-center text-center">
@@ -350,16 +354,6 @@ const HomePage: React.FC = () => {
                 </div>
               ))}
             </div>
-            
-            <div className="mt-12 text-center">
-              <button 
-                onClick={() => handleStartTest()}
-                className="inline-flex items-center justify-center rounded-lg border border-slate-200 bg-white px-6 py-3 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 transition-colors"
-              >
-                <BookOpen className="mr-2 h-4 w-4" />
-                Browse Full Catalog
-              </button>
-            </div>
           </div>
         </section>
 
@@ -369,17 +363,10 @@ const HomePage: React.FC = () => {
             <div className="grid gap-12 lg:grid-cols-2 lg:items-center">
               <div className="relative order-2 lg:order-1">
                 <img 
-                  src="https://images.unsplash.com/photo-1522202176988-66273c2fd55f?q=80&w=1742&auto=format&fit=crop" 
+                  src="https://images.unsplash.com/photo-1522202176988-66273c2fd55f?q=80&w=1740&auto=format&fit=crop" 
                   alt="Students discussing" 
                   className="rounded-2xl shadow-2xl"
                 />
-                <div className="absolute -right-8 top-1/2 hidden h-40 w-40 -translate-y-1/2 items-center justify-center rounded-xl bg-indigo-600 p-4 text-white shadow-xl lg:flex animate-pulse">
-                  <div className="text-center">
-                    <BrainCircuit className="mx-auto h-10 w-10 mb-2" />
-                    <p className="font-bold">AI Driven</p>
-                    <p className="text-xs opacity-80">Analysis</p>
-                  </div>
-                </div>
               </div>
               
               <div className="order-1 lg:order-2">

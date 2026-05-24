@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
+import SafeMathRenderer from "./SafeMathRenderer"; // ✅ Safe LaTeX presentation bridge imported cleanly
 
 type OptionLetter = "A" | "B" | "C" | "D";
 
@@ -99,11 +100,9 @@ export default function TestRunner({
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<SubmitResult | null>(null);
   const [breakdown, setBreakdown] = useState<ReviewItem[] | null>(null);
-
-  // initialize remainingSeconds with prop default; may be overwritten by server meta
   const [remainingSeconds, setRemainingSeconds] = useState<number>(durationMinutes * 60);
 
-  // confirmation modal state
+  // Confirmation modal state
   const [modalOpen, setModalOpen] = useState(false);
   const [modalAction, setModalAction] = useState<"end" | "submit" | null>(null);
   const [modalInput, setModalInput] = useState("");
@@ -133,48 +132,35 @@ export default function TestRunner({
     }
   }
 
-  // <-- NEW: fetch session meta once to initialize duration (only time-related change)
   useEffect(() => {
     if (!sessionId) return;
-
     let cancelled = false;
 
     async function fetchSessionMeta() {
       try {
         const res = await fetch(`${API_BASE}/tests/${encodeURIComponent(sessionId)}`);
         const json = await res.json().catch(() => null);
-        if (!res.ok || !json || !json.success) {
-          // don't treat missing meta as fatal — keep local defaults
-          return;
-        }
+        if (!res.ok || !json || !json.success) return;
 
-        // duration priority: meta.durationMinutes -> session.durationMinutes -> default prop
-        const serverDuration =
-          json.meta?.durationMinutes ?? json.session?.durationMinutes ?? null;
+        const serverDuration = json.meta?.durationMinutes ?? json.session?.durationMinutes ?? null;
         if (!cancelled && serverDuration != null) {
           const dm = Number(serverDuration) || durationMinutes;
           setRemainingSeconds(dm * 60);
         }
 
-        // optionally set totalQuestions if server provided numQuestions or questions length
-        const serverTotal =
-          json.session?.numQuestions ?? (Array.isArray(json.questions) ? json.questions.length : null);
+        const serverTotal = json.session?.numQuestions ?? (Array.isArray(json.questions) ? json.questions.length : null);
         if (!cancelled && serverTotal != null) {
           setTotalQuestions(Number(serverTotal));
         }
       } catch (err) {
-        // ignore — keep local defaults
         console.warn("Failed to fetch session meta for timer initialization:", err);
       }
     }
 
     fetchSessionMeta();
-
     return () => {
       cancelled = true;
     };
-    // only run once per sessionId
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
   async function fetchQuestion(index: number) {
@@ -208,7 +194,6 @@ export default function TestRunner({
   useEffect(() => {
     if (!sessionId) return;
     fetchQuestion(currentIndex);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, currentIndex]);
 
   useEffect(() => {
@@ -224,7 +209,6 @@ export default function TestRunner({
       });
     }, 1000);
     return () => window.clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [result]);
 
   function handleOptionSelect(opt: OptionLetter) {
@@ -280,13 +264,12 @@ export default function TestRunner({
         selectedOption,
       }));
 
-     const res = await fetch(`${API_BASE}/tests/${encodeURIComponent(sessionId)}/submit`, {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  credentials: "include", // 🔥 THIS IS THE KEY
-  body: JSON.stringify({ answers: payloadAnswers }),
-});
-
+      const res = await fetch(`${API_BASE}/tests/${encodeURIComponent(sessionId)}/submit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ answers: payloadAnswers }),
+      });
 
       const json = (await res.json()) as SubmitResult;
       if (!res.ok || !json.success) {
@@ -341,9 +324,7 @@ export default function TestRunner({
   }
 
   const formatTime = (secs: number) => {
-    const m = Math.floor(secs / 60)
-      .toString()
-      .padStart(2, "0");
+    const m = Math.floor(secs / 60).toString().padStart(2, "0");
     const s = (secs % 60).toString().padStart(2, "0");
     return `${m}:${s}`;
   };
@@ -353,6 +334,7 @@ export default function TestRunner({
     window.location.href = `/tests/${encodeURIComponent(sessionId)}/result`;
   }
 
+  /* ================= FRONTEND TARGET POSITION 1: SCORING DASHBOARD VIEW ================= */
   if (result || breakdown) {
     const total = result?.totalQuestions ?? breakdown?.length ?? 0;
     const attempted = result?.attempted ?? (breakdown ? breakdown.filter((b) => b.selectedOption).length : 0);
@@ -384,7 +366,10 @@ export default function TestRunner({
                   <div className="flex items-start justify-between">
                     <div>
                       <div className="text-sm text-slate-600">Q{b.indexInSession}</div>
-                      <div className="font-medium mt-1">{b.questionText}</div>
+                      {/* ✅ FIX 1: Render historical breakdown question title natively via LaTeX */}
+                      <div className="font-medium mt-1">
+                        <SafeMathRenderer text={b.questionText} />
+                      </div>
                     </div>
                     <div className="text-sm">
                       {b.isCorrect ? (
@@ -408,7 +393,10 @@ export default function TestRunner({
                         <div key={opt} className={`p-2 rounded border ${classes} flex items-center justify-between`}>
                           <div className="flex items-center gap-3">
                             <div className="w-7 h-7 rounded-full flex items-center justify-center font-semibold text-sm bg-slate-100">{opt}</div>
-                            <div className="text-sm">{optText}</div>
+                            {/* ✅ FIX 2: Render option items in structural breakdown grid safely */}
+                            <div className="text-sm">
+                              <SafeMathRenderer text={optText} />
+                            </div>
                           </div>
                           <div className="text-xs text-slate-600">{isCorrectOpt ? "Answer" : isSelected ? "Your choice" : ""}</div>
                         </div>
@@ -416,7 +404,13 @@ export default function TestRunner({
                     })}
                   </div>
 
-                  {b.explanation ? <div className="mt-3 text-sm text-slate-700 bg-slate-50 p-3 rounded">{b.explanation}</div> : null}
+                  {/* ✅ FIX 3: Render multiline detailed solutions blocks completely without data damage */}
+                  {b.explanation ? (
+                    <div className="mt-3 text-sm text-slate-700 bg-slate-50 p-3 rounded">
+                      <span className="block font-bold text-gray-700 mb-1">Explanation:</span>
+                      <SafeMathRenderer text={b.explanation} />
+                    </div>
+                  ) : null}
                 </div>
               ))}
             </div>
@@ -439,6 +433,7 @@ export default function TestRunner({
     );
   }
 
+  /* ================= FRONTEND TARGET POSITION 2: THE RUNTIME LIVE TEST INTERFACE ================= */
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-100 to-white pb-12">
       <header className="bg-white shadow sticky top-0 z-30">
@@ -467,9 +462,7 @@ export default function TestRunner({
           <div className="flex items-center gap-4">
             <div className="text-sm text-slate-600">Time Left</div>
             <div className="font-mono bg-slate-800 text-white px-3 py-1 rounded">{formatTime(remainingSeconds)}</div>
-
             <button onClick={openResultPage} className="text-xs border px-3 py-1 rounded">View Result</button>
-
             <button onClick={() => openConfirm("end")} className="text-xs bg-rose-600 text-white px-3 py-1 rounded cursor-pointer disabled:cursor-not-allowed">End Now</button>
           </div>
         </div>
@@ -488,7 +481,6 @@ export default function TestRunner({
                 <h3 className="text-2xl font-semibold">Q. {question?.indexInSession ?? currentIndex}</h3>
                 <div className="text-sm text-slate-500">{question?.topic ?? ""}</div>
               </div>
-
               <div className="text-sm text-slate-600">Difficulty: <span className="font-medium">{question?.difficulty ?? "-"}</span></div>
             </div>
 
@@ -499,10 +491,13 @@ export default function TestRunner({
                 <div className="text-sm text-rose-600">{error}</div>
               ) : question ? (
                 <>
-                  <div className="text-base leading-relaxed">{question.questionText}</div>
+                  {/* ✅ FIX 4: Wire the main core active question description block safely */}
+                  <div className="text-base leading-relaxed text-gray-900 mb-6">
+                    <SafeMathRenderer text={question.questionText} />
+                  </div>
 
                   {question.imageUrl ? (
-                    <div className="mt-4 flex justify-center">
+                    <div className="mt-4 flex justify-center mb-6">
                       <img src={question.imageUrl} alt={`Question ${question.indexInSession} figure`} className="max-h-48 object-contain rounded-md shadow" />
                     </div>
                   ) : null}
@@ -530,10 +525,13 @@ export default function TestRunner({
                             className="mt-1 h-4 w-4 cursor-pointer"
                           />
 
-                          <div>
+                          <div className="flex-1">
                             <div className="flex items-center gap-3">
-                              <div className="w-7 h-7 rounded-full flex items-center justify-center font-semibold text-sm bg-slate-100">{opt}</div>
-                              <div className="font-medium">{text}</div>
+                              <div className="w-7 h-7 rounded-full flex items-center justify-center font-semibold text-sm bg-slate-100 flex-shrink-0">{opt}</div>
+                              {/* ✅ FIX 5: Render active structural raw question choices labels cleanly */}
+                              <div className="font-medium text-gray-800">
+                                <SafeMathRenderer text={text} />
+                              </div>
                             </div>
                           </div>
                         </motion.label>
@@ -545,9 +543,7 @@ export default function TestRunner({
                     <button onClick={handleClearResponse} className="px-4 py-2 border rounded-md text-sm cursor-pointer">Clear</button>
                     <button onClick={handleMarkForReviewAndNext} className="px-4 py-2 border rounded-md text-sm cursor-pointer">Mark & Next</button>
                     <button onClick={handleSaveAndNext} className="px-4 py-2 bg-indigo-600 text-white rounded-md text-sm cursor-pointer">Save & Next</button>
-
                     <div className="flex-1" />
-
                     <button onClick={handlePrevious} disabled={currentIndex === 1} className="px-4 py-2 border rounded-md text-sm cursor-pointer disabled:cursor-not-allowed">Previous</button>
                     <button onClick={() => openConfirm("submit")} disabled={submitting} className="px-4 py-2 bg-rose-600 text-white rounded-md text-sm cursor-pointer disabled:cursor-not-allowed">
                       {submitting ? "Submitting…" : "Submit Test"}

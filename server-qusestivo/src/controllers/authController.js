@@ -48,20 +48,20 @@ export const signup = async (req, res) => {
 
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
-   await prisma.pendingUser.create({
-  data: {
-    email,
-    name,
-    passwordHash: await doHash(password, 12),
-    otpHash: hmacProcess(otp, process.env.HMAC_VARIFICATION_CODE_SECRET),
-    otpExpiresAt: new Date(Date.now() + 5 * 60 * 1000),
-  },
-});
+    await prisma.pendingUser.create({
+      data: {
+        email,
+        name,
+        passwordHash: await doHash(password, 12),
+        otpHash: hmacProcess(otp, process.env.HMAC_VARIFICATION_CODE_SECRET),
+        otpExpiresAt: new Date(Date.now() + 5 * 60 * 1000),
+      },
+    });
 
-await transport.sendMail({
-  to: email,
-  subject: "🎉 Welcome to Quistivo – Verify Your Email",
-  html: `
+    await transport.sendMail({
+      to: email,
+      subject: "Welcome to Quistivo - Verify Your Email",
+      html: `
     <div style="max-width:600px;margin:0 auto;font-family:Arial,Helvetica,sans-serif;background:#ffffff;border-radius:8px;border:1px solid #e5e7eb;padding:24px;">
       
       <div style="text-align:center;margin-bottom:20px;">
@@ -106,7 +106,7 @@ await transport.sendMail({
       </p>
     </div>
   `,
-});
+    });
 
 
     res.json({ success: true, message: "OTP sent" });
@@ -125,7 +125,7 @@ export const verifySignupOtp = async (req, res) => {
     const { email, otp } = req.body;
 
     const pending = await prisma.pendingUser.findUnique({ where: { email } });
-    if (!pending || pending.otpExpiry < new Date())  
+    if (!pending || pending.otpExpiry < new Date())
       return res.status(400).json({ message: "OTP invalid or expired" });
 
     if (
@@ -203,10 +203,10 @@ export const sendLoginOtp = async (req, res) => {
       },
     });
 
-  await transport.sendMail({
-  to: email,
-  subject: "Your Quistivo Login OTP",
-  html: `
+    await transport.sendMail({
+      to: email,
+      subject: "Your Quistivo Login OTP",
+      html: `
     <div style="max-width:600px;margin:0 auto;font-family:Arial,Helvetica,sans-serif;background:#ffffff;border-radius:8px;border:1px solid #e5e7eb;padding:24px;">
       
       <div style="text-align:center;margin-bottom:20px;">
@@ -246,7 +246,7 @@ export const sendLoginOtp = async (req, res) => {
       </p>
     </div>
   `,
-});
+    });
 
     res.json({ success: true });
   } catch (err) {
@@ -298,29 +298,29 @@ export const sendResetOtp = async (req, res) => {
     if (!user) return res.status(404).json({ message: "User not found" });
 
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
-  await prisma.user.update({
-  where: { email },
-  data: {
-    otpHash: null,
-    otpPurpose: null,
-    otpExpiresAt: null,
-  },
-});
+    await prisma.user.update({
+      where: { email },
+      data: {
+        otpHash: null,
+        otpPurpose: null,
+        otpExpiresAt: null,
+      },
+    });
 
-await prisma.user.update({
-  where: { email },
-  data: {
-    otpHash: hmacProcess(otp, process.env.HMAC_VARIFICATION_CODE_SECRET),
-    otpPurpose: "RESET_PASSWORD",
-    otpExpiresAt: new Date(Date.now() + 5 * 60 * 1000),
-  },
-});
+    await prisma.user.update({
+      where: { email },
+      data: {
+        otpHash: hmacProcess(otp, process.env.HMAC_VARIFICATION_CODE_SECRET),
+        otpPurpose: "RESET_PASSWORD",
+        otpExpiresAt: new Date(Date.now() + 5 * 60 * 1000),
+      },
+    });
 
 
     await transport.sendMail({
-  to: email,
-  subject: "Quistivo Password Reset Code – Secure Your Account",
-  html: `
+      to: email,
+      subject: "Quistivo Password Reset Code – Secure Your Account",
+      html: `
     <div style="max-width:600px;margin:0 auto;font-family:Arial,Helvetica,sans-serif;background:#ffffff;border-radius:8px;border:1px solid #e5e7eb;padding:24px;">
       
       <div style="text-align:center;margin-bottom:20px;">
@@ -360,7 +360,7 @@ await prisma.user.update({
       </p>
     </div>
   `,
-});
+    });
 
 
     res.json({ success: true });
@@ -523,7 +523,7 @@ export const logout = (req, res) => {
     httpOnly: true,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
-    path: "/", 
+    path: "/",
   });
 
   return res.status(200).json({
@@ -535,7 +535,7 @@ export const logout = (req, res) => {
 // controllers/userStatsController.js
 export const getUserStats = async (req, res) => {
   try {
-    const userId = req.userId; 
+    const userId = req.userId;
 
     // 1. Fetch User Profile
     const user = await prisma.user.findUnique({
@@ -564,7 +564,7 @@ export const getUserStats = async (req, res) => {
     const totalGenerated = sessions.length;
     const attemptedSessions = sessions.filter(s => s.answers.length > 0);
     const totalAttempted = attemptedSessions.length;
-    
+
     let totalScoreSum = 0;
     let bestScore = 0;
 
@@ -572,14 +572,14 @@ export const getUserStats = async (req, res) => {
       const totalQ = session._count.questions || session.numQuestions || 0;
       const correct = session.answers.filter(a => a.isCorrect).length;
       const percentage = totalQ > 0 ? Math.round((correct / totalQ) * 100) : 0;
-      
+
       if (session.answers.length > 0) {
         totalScoreSum += percentage;
         if (percentage > bestScore) bestScore = percentage;
       }
 
       return {
-        id: session.id, 
+        id: session.id,
         examName: session.examCategory?.name || session.examType,
         date: session.createdAt,
         score: percentage,
@@ -595,7 +595,7 @@ export const getUserStats = async (req, res) => {
       success: true,
       user,
       stats: { totalGenerated, totalAttempted, averageScore, bestScore },
-      history: history.slice(0, 10) 
+      history: history.slice(0, 10)
     });
 
   } catch (err) {
@@ -608,12 +608,27 @@ export const getUserStats = async (req, res) => {
 
 const cleanExpiredPendingUsers = async () => {
   try {
-    await prisma.pendingUser.deleteMany({
-      where: { otpExpiry: { lt: new Date() } },
-    });
+    const deleted =
+      await prisma.pendingUser.deleteMany({
+        where: {
+          otpExpiresAt: {
+            lt: new Date(),
+          },
+        },
+      });
+
+    console.log(
+      `Deleted ${deleted.count} expired pending users`
+    );
   } catch (err) {
-    console.error("Pending cleanup failed:", err);
+    console.error(
+      "Pending cleanup failed:",
+      err
+    );
   }
 };
 
-setInterval(cleanExpiredPendingUsers, 15 * 60 * 1000);
+setInterval(
+  cleanExpiredPendingUsers,
+  60 * 1000
+);

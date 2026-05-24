@@ -11,25 +11,33 @@
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.1.0",
-    "@prisma/client": "^7.1.0",
+    "@prisma/client": "^7.8.0",
     "axios": "^1.6.7",
     "bcryptjs": "^2.4.3",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
+    "docx-parser": "^0.2.1",
     "dotenv": "^16.4.0",
     "express": "^4.19.0",
     "express-fileupload": "^1.5.2",
     "express-rate-limit": "^8.1.0",
+    "googleapis": "^172.0.0",
     "groq-sdk": "^0.37.0",
     "joi": "^18.0.1",
     "jsonwebtoken": "^9.0.2",
+    "katex": "^0.17.0",
     "morgan": "^1.10.1",
+    "multer": "^2.1.1",
     "mysql": "^2.18.1",
     "nanoid": "^5.0.6",
     "nodemailer": "^7.0.6",
-    "pg": "^8.16.3"
+    "pdf-parse-fork": "^1.2.0",
+    "pg": "^8.16.3",
+    "react-markdown": "^10.1.0",
+    "rehype-katex": "^7.0.1",
+    "remark-math": "^6.0.0"
   },
   "devDependencies": {
-    "prisma": "^7.1.0"
+    "prisma": "^7.8.0"
   }
 }

@@ -142,3 +142,27 @@ model TestSession {
   questions TestQuestion[]
   answers   TestAnswer[]
 }
+
+model ResumeAnalysis {
+  id              String   @id @default(uuid())
+  userId          String
+  fileName        String
+  targetCompany   String
+  targetRole      String
+  experienceLevel String
+  jobDescription  String?  @db.Text
+  overallScore    Int
+  matchPercentage Int
+  radarMetrics    Json     // distribution breakdown scores
+  missingSkills   Json     // String[]
+  strengths       Json     // String[]
+  weaknesses      Json     // String[]
+  
+  // 🛠️ NEW EXTENSION: Structured deep linting indicators matching ResumeWorded criteria
+// Puraani line ko isse replace karein:
+lintChecks      Json     @default("{}")
+ suggestions     Json     // Structured suggestion map
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}

@@ -44,11 +44,8 @@ type ServerGenerateResponse = {
 type Message = { type: "error" | "success"; text: string } | null;
 
 // --- CONFIG ---
-const API =
-  (typeof import.meta !== "undefined" && (import.meta as any).env?.VITE_API_URL) ||
-  (typeof process !== "undefined" && (process.env as any).NEXT_PUBLIC_API_URL) ||
-  (typeof process !== "undefined" && (process.env as any).REACT_APP_API_URL) ||
-  "http://localhost:4000";
+const API= import.meta.env.VITE_API_URL || 'http://localhost:4000';
+
 
 const CATEGORY_BASE = `${API}/api/category`;
 const TOPIC_BASE = `${API}/api/cate_topics`;

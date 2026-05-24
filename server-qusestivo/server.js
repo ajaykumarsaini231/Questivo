@@ -9,20 +9,31 @@ import authrouter from "./src/routes/auth.routes.js"
 import cookieParser from "cookie-parser";
 import adminRoutes from "./src/routes/adminRoutes.js"
 import userroter from './src/routes/userRoutes.js'
+import mailRoutes from "./src/routes/mailRoutes.js";
+import resumeRouter from "./src/routes/resumeRoutes.js";
 
 dotenv.config();
 
 const app = express();
+app.use(cors({
+  origin: process.env.FRONTEND_URL ,
+  credentials: true
+}));
 
 app.use(cookieParser());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+app.use(
+    "/api/mail",
+    mailRoutes
+);
+app.use("/api/resume", resumeRouter);
 // Allow frontend access
-app.use(cors({
-  origin: process.env.FRONTEND_URL ,
-  credentials: true
-}));
+// app.use(cors({
+//   origin: process.env.FRONTEND_URL ,
+//   credentials: true
+// }));
 
 app.get("/", (req, res) => {
   res.send("Mock test API (Prisma + MongoDB) running");

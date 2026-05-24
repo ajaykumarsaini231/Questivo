@@ -45,19 +45,18 @@ export const Dashboard = () => {
   }, []);
 
   return (
-    <div className="space-y-6">
+   <div className="space-y-8 px-4 lg:px-8 xl:px-12 py-4">      
       <h2 className="text-3xl font-bold text-slate-800">Dashboard Overview</h2>
       
       {/* --- Top Stats Cards --- */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        <StatCard title="Total Users" value={stats.users} icon={Users} color="bg-blue-500" />
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6 lg:gap-8">        <StatCard title="Total Users" value={stats.users} icon={Users} color="bg-blue-500" />
         <StatCard title="Total Sessions" value={stats.sessions} icon={PlayCircle} color="bg-green-500" />
         <StatCard title="Categories" value={stats.categories} icon={BookOpen} color="bg-purple-500" />
         <StatCard title="Pending Users" value={stats.pending} icon={Clock} color="bg-orange-500" />
       </div>
 
       {/* --- Recent Activity Section (Replaced Placeholder) --- */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+     <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden lg:px-2">
         <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center">
           <h3 className="text-lg font-bold text-slate-800">Recently Created Sessions</h3>
           <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded-full">Latest 5</span>

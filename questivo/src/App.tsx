@@ -21,6 +21,7 @@ import { SessionDetailsPage } from "./pages/SessionDetailsPage";
 
 // --- NEW IMPORT ---
 import { AdminRequireAuth } from "./componenets/AdminRequireAuth"; 
+import ResumeATSPage from "./pages/Resume_score";
 
 /* ================= APP CONTENT ================= */
 function AppContent() {
@@ -41,6 +42,7 @@ function AppContent() {
         <Route path="/" element={<HomePage />} />
         <Route path="/GenerateTestPage" element={<GenerateTestPage />} />
         <Route path="/profile" element={<ProfilePage />} />
+        <Route path="/resume_ats_score" element={<ResumeATSPage />} />
 
         {/* ================= AUTH ROUTES ================= */}
         <Route path="/signin" element={<Signup />} />
