@@ -1,0 +1,146 @@
+Bhai, aapke engineering chart ke flow map ke hisab se **Questivo Live Interview Studio** ka clear layer-by-layer architectural workflow process aur event signals breakdown niche diya gaya hai.
+
+Aap is structural layout ko direct documentation ya production documentation loops mapping metrics mein design base bana sakte hain:
+
+---
+
+## 🏗️ Questivo Voice Loop — Core State Machine Matrix
+
+Aapka system ek strict, deterministic **State Machine Lifecycle** follow karta hai taaki background noise ya dynamic overlap se events drop na ho.
+
+```
+ [IDLE] ──(Form Settings Verified)──► [THINKING] ──(Groq Llama Inference)
+                                          │
+   ┌──────────────────────────────────────┘
+   ▼
+ [GENERATING_VOICE] ──(Edge WebSockets Tunnel)──► [PLAYING] ──(Audio Elements Streaming)
+                                                                     │
+   ┌─────────────────────────────────────────────────────────────────┘
+   ▼
+ [LISTENING] ──(MicVAD Active Tokens)──► [FINAL_TRANSCRIBING] ──(Groq Whisper v3 Ingest)
+   ▲                                                                     │
+   └───────────────────────────(State Loopback Chain)────────────────────┘
+
+```
+
+---
+
+## 🔄 Dynamic Data Stream & Signal Handshake Breakdown
+
+### 1. Verification Phase (Form Settings Initialization)
+
+* **Frontend Action:** User profile inputs check karta hai (`authChecked`), target role aur duration parameters select karta hai, aur local resume asset block inject karke button toggle karta hai.
+* **Network Pipeline:** HTTP POST parameters schema data `axios.post('/api/interview/initialize')` ke true pipelines hit karke metadata record Prisma client row properties (`durationMinutes`) ke columns mein update karta hai.
+* **Handshake Synchronization:** Frontend native WebSocket tunnel open karke dynamic frame signal event drop karta hai:
+```typescript
+socket.emit("join-interview-session", targetSessionId);
+
+```
+
+
+
+### 2. Analytical Inference Engine Block (`THINKING`)
+
+* **Backend Action:** Persistent mapping storage (`globalSessionMemory`) se current state logs fetch karta hai.
+* **Token Saver Slide Check:** Continuous track logs truncation layers verify karke calculation sliding array bounded thresholds maintain karta hai:
+```javascript
+if (computationalChatHistory.length > 6) { /* Keeps System + Last 6 Frames Only */ }
+
+```
+
+
+* **Dynamic Time Wrap Directive:** Agar continuous synchronization timer frame status window **30 seconds** se lower value compute karega, toh LLM history array trace mein immediate alert append trigger ho jayega:
+```text
+Forcing boundary wrap rule flag -> State exactly "Let's conclude your interview..."
+
+```
+
+
+* **Event Loop Emission:** Inference engine prompt configurations match karke text object layout complete karta hai aur broadcast update run karta hai:
+```javascript
+socket.emit("candidate-transcript-final", { sender: 'ai', text: aiGeneratedQuestion });
+
+```
+
+
+
+### 3. Vocal Synthesis Matrix Configuration (`GENERATING_VOICE`)
+
+* **Vocal Core Ingest:** Output string vectors bina kisi dynamic character splicing or cutting parameters limits threshold drop ke direct clean script buffer sequence processing module structure ko hit karte hain.
+* **The High-Speed Edge Connection Gateway:** Backend bina kisi third-party external dependency compilation warnings ke Windows Edge framework ka native downstream protocol layer open karta hai aur expressive neural asset layer **`en-US-AvaMultilingualNeural`** voice properties verify karta hai.
+* **Binary Processing Event:** Stream compilation direct complete frame array block create karta hai aur array bits emit karta hai:
+```javascript
+socket.emit("ai-speech-packet", finalCompiledAudioBuffer);
+
+```
+
+
+* **Automatic Exception Recovery Failover (Priority 4 Strategy):** Agar cloud servers block structural layers down behave kareinge, toh backup trigger message fire hoga taaki frontend locally browser native engines hardware `window.speechSynthesis` execute kar sake:
+```javascript
+socket.emit("ai-speech-failover", { text: aiGeneratedQuestion });
+
+```
+
+
+
+### 4. Playback Locks & Audio Rendering Control (`PLAYING`)
+
+* **Frontend Isolation Logic:** Jaise hi system component par binary speech input frames parse hote hain, frontend instant browser state logic execute karke VAD processing loops ko mutate/mute kar deta hai:
+```typescript
+await transitionToSilent(); // MicVAD paused explicitly, Native WebSpeech engine stopped
+
+```
+
+
+* **Audio Buffer Context Delivery:** Raw packets array array data stream bits linear decoding layers `ctx.decodeAudioData(audioBufferArray)` coordinate karke node parameters complete parameters match process map pipeline complete karte hain.
+* **Critical Mutex Resumption Guard:** Jab track stream array execution complete structural framework `source.onended` capture karta hai, tab lock dynamic framework flip karke microphone drivers return mode switch state fire karta hai:
+```typescript
+source.onended = async () => { await transitionToListening(); }; // State flips back to LISTENING
+
+```
+
+
+
+### 5. Capture Feed & Transcriptions Cascade (`LISTENING` ──► `FINAL_TRANSCRIBING`)
+
+* **The Optimistic Interface Matrix:** Jab user bolna shuru karta hai, browser internal local frame engines `SpeechRecognition` sequence text arrays parse karke overlay state text parameters change blocks *instantly real-time view template container* me type karta hai:
+```typescript
+setInterimText(runningInterimBuffer); // Optimistic UI layout typed instantly
+
+```
+
+
+* **Silence Boundary Processing Event:** Jab physical noise input silence detection drop boundaries cross karta hai, tab Silero VAD `.onnx` weight validation algorithms model instance process map coordinate handle matrix close block fire karke float arrays capture signal map trigger karta hai:
+```typescript
+socket.emit("candidate-voice-stream", audioFloat32Array);
+
+```
+
+
+* **Ingestion Transcription Matrix Processing:** Backend binary array files instant raw WAV format elements parameters layout file storage path coordinate layers par append karke data directly process logic bounds par pass karta hai:
+```javascript
+const transcription = await groq.audio.transcriptions.create({ model: 'whisper-large-v3' });
+
+```
+
+
+* **Memory Commit Loopback Execution:** Output candidate text parsing framework directly memory dynamic mappings aur dynamic databases tables elements parameters (`prisma.interviewMessage.create`) me persistence layer update pass karke dubaara sequence trigger handle frame check open kar deta hai:
+```javascript
+await runAgentInferenceLoop(socket); // Repeats loop indefinitely until session status completes
+
+```
+
+
+
+---
+
+## 🛠️ Verification Metrics Implementation Matrix
+
+| Metric Stage Layer | Active Front Transition State | Target Active Back Gateway Events | Security Execution Guards |
+| --- | --- | --- | --- |
+| **Authentication Form Verification** | `IDLE` | Handshake Token Handshake Validate Check | `credentials: "include"` auth layers |
+| **Llama Technical Processing** | `THINKING` | LLM Thread Core Context Compiling | Mutex block flags (`aiBusy = true`) |
+| **Edge TTS Synthesizing** | `GENERATING_VOICE` | Direct Raw Streaming Pipeline | In-memory hashing signatures (`MD5 Cache`) |
+| **Vocal Playback Phase** | `PLAYING` | Context Array Nodes Playback Sync | Auto-Mute controls (`transitionToSilent`) |
+| **Mic Live Tracking** | `LISTENING` | VAD Signal Weight Extraction | Real-time translation trackers template |
+| **Whisper Conversion Ingest** | `FINAL_TRANSCRIBING` | WAV Buffer Generation & Prisma Commit | Disk memory purge buffers (`fs.unlinkSync`) |

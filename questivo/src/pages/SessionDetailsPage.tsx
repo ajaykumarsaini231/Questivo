@@ -2,8 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import { 
-  ArrowLeft, CheckCircle, XCircle, Clock, 
-  HelpCircle, User, Award, AlertCircle, Printer, FileText, CheckSquare
+  ArrowLeft, CheckCircle, XCircle,  Printer, FileText, CheckSquare
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import SafeMathRenderer from '../componenets/SafeMathRenderer';
@@ -23,7 +22,7 @@ export const SessionDetailsPage = () => {
         toast.error("Session not found");
         navigate('/admin/sessions');
       } finally {
-        loading(false);
+        setLoading(false);
       }
     };
     fetchDetails();

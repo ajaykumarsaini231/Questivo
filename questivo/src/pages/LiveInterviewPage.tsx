@@ -3,8 +3,8 @@ import { useParams, useNavigate } from 'react-router-dom';
 import io from 'socket.io-client';
 import axios from 'axios';
 import {
-    Mic, MicOff, PhoneOff, Loader2, Sparkles, Target,
-    Upload, FileText, Briefcase, X, CheckCircle2, Clock
+    Mic, MicOff, PhoneOff, Loader2, Target,
+    Upload, FileText, Briefcase, X, Clock
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 
@@ -101,7 +101,7 @@ export const LiveInterviewPage = () => {
 
     // Native Web Speech Engine Configuration Loop
     useEffect(() => {
-        if (!authChecked) return; // Prevent hardware instantiation if handshake is unverified
+        if (!authChecked) return; 
         const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
         if (!SpeechRecognition) return;
 
@@ -299,8 +299,10 @@ export const LiveInterviewPage = () => {
             });
 
             toast.dismiss(loadingToastId);
+            
             const targetSessionId = response.data?.sessionId || sessionId;
 
+            // 🛠️ FIXED: Force direct native websockets tunnel connection safely on cloud infrastructure to eliminate 400 Bad Requests
             socketRef.current = io(API, {
                 transports: ['websocket'],
                 upgrade: false,
@@ -384,7 +386,6 @@ export const LiveInterviewPage = () => {
 
     const isFormValid = fileState?.status === 'success' && role !== '' && experience !== '';
 
-    // 🔄 RENDERS THE AUTHENTICATION MATRIX MOCK SPLASH TO REPLICATE VERIFICATION LOOPS
     if (!authChecked || loading) return (
         <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-white">
             <Loader2 className="animate-spin text-blue-500 mb-4" size={40} />
