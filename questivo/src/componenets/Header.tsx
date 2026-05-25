@@ -142,6 +142,12 @@ const Header: React.FC = () => {
           >
             Resume ATS Score
           </a>
+           <a
+            href="/interviews"
+            className="text-sm text-slate-600 hover:text-indigo-600"
+          >
+            AI Interview Studio
+          </a>
         </nav>
 
         {/* Desktop Auth */}
@@ -239,6 +245,14 @@ const Header: React.FC = () => {
               >
                 <BookOpen className="h-4 w-4" />
                 Resume ATS Score
+              </a>
+               <a
+                href="/interviews"
+                onClick={() => setIsMenuOpen(false)}
+                className="flex items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-slate-600 transition-colors hover:bg-indigo-50 hover:text-indigo-600"
+              >
+                <BookOpen className="h-4 w-4" />
+                AI Interview Studio
               </a>
             </div>
 

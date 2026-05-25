@@ -142,6 +142,59 @@ export const AdminLayout: React.FC = () => {
         </div>
       </aside>
 
+<style>{`
+@media print{
+
+/* ROOT FIX */
+html,
+body,
+#root{
+height:auto!important;
+overflow:visible!important;
+}
+
+/* ADMIN LAYOUT FIX */
+.flex.h-screen{
+height:auto!important;
+overflow:visible!important;
+}
+
+/* MAIN */
+main{
+height:auto!important;
+
+overflow:visible!important;
+}
+
+/* CONTENT SCROLLER */
+.flex-1{
+overflow:visible!important;
+
+height:auto!important;
+
+max-height:none!important;
+}
+
+/* THIS IS THE REAL FIX */
+.overflow-y-auto{
+
+overflow:visible!important;
+
+height:auto!important;
+
+max-height:none!important;
+}
+
+/* REMOVE SIDEBAR */
+aside,
+header,
+.no-print{
+display:none!important;
+}
+
+}
+`}</style>
+
       {/* ================= MAIN CONTENT ================= */}
       <main className="flex-1 flex flex-col h-full overflow-hidden">
         

@@ -88,17 +88,13 @@ async function fetchBatchFromGroq({
 }) {
   // 🔥 COMPRESSED PROMPT (Saves ~40% Tokens)
   // We removed lengthy examples but kept strict rules.
-  const systemPrompt = `
-ACT: Chief Examiner for competitive exams (${examType}).
-GOAL: Create ${count} TOUGH, multi-step MCQs to filter top 1% candidates.
-TOPICS: ${topics.join(", ")}
-LEVEL: ${difficulty} (Very Hard)
-LANG: ${medium}
-
-⛔ RULES:
-1. NO direct "What is X?" questions.
-2. Options MUST be close distractors (e.g. 10.2 vs 10.5).
-3. REQUIRED TYPES: Statement Analysis (I, II, III), Assertion-Reason, Match Columns, Scenario.
+ const systemPrompt = `ACT: Chief Examiner (${examType}). GOAL: Create ${count} TOUGH, multi-step MCQs. TOPICS: ${topics.join(", ")}. LEVEL: ${difficulty}.
+⛔ STRICT RULES:
+1. Every math symbol, constant, matrix, or variable (x, y, n, a_n, M, R) MUST be enclosed in delimiters.
+2. INLINE expressions: Use \\( ... \\). (e.g. \\( f(x)=x^2 \\), \\( \\vec{a}=\\langle 2,3 \\rangle \\)).
+3. OPTIONS (A, B, C, D): Enclose whole content in \\( ... \\) if it has math/fractions. (e.g. A) \\( \\frac{1}{2} \\)). NO trailing raw $.
+4. DISPLAY/PIECEWISE: Use \\[ \\begin{cases} ... \\end{cases} \\] for functions/cases on separate lines.
+5. Spaces: Never clump text with math slashes (avoid "whereA(5,0)").
 
 FORMAT (STRICT PLAIN TEXT, Separator: "---"):
 Question: <Text>
@@ -109,8 +105,7 @@ C) <Opt>
 D) <Opt>
 Correct: <A/B/C/D>
 Explanation: <Reasoning>
----
-`;
+---`;
 
   try {
     const completion = await groq.chat.completions.create({

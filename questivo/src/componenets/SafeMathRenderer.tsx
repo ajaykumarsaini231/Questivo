@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import { preprocessMath } from '../lib/mathUtils';
-
+// import SafeMathRenderer from "./SafeMathRenderer";
 // Import essential styling structures natively for mathematical symbol scaling
 import 'katex/dist/katex.min.css';
 

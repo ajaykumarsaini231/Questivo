@@ -23,14 +23,19 @@ import { SessionDetailsPage } from "./pages/SessionDetailsPage";
 import { AdminRequireAuth } from "./componenets/AdminRequireAuth"; 
 import ResumeATSPage from "./pages/Resume_score";
 
+// 🛠️ NEW AI INTERVIEW STUDIO IMPORT
+import { LiveInterviewPage } from "./pages/LiveInterviewPage";
+
 /* ================= APP CONTENT ================= */
 function AppContent() {
   const location = useLocation();
 
+  // 🛠️ MODIFIED: Added "/interviews/" in the header suppression block matrix
   const hideHeader =
     location.pathname === "/signin" ||
     location.pathname === "/signup" ||
     location.pathname.startsWith("/tests/") ||
+    location.pathname.startsWith("/interviews/") || // Voice page clean layout lock
     location.pathname.startsWith("/admin");
 
   return (
@@ -52,11 +57,14 @@ function AppContent() {
         <Route path="/tests/:sessionId" element={<TestRunner />} />
         <Route path="/tests/:sessionId/result" element={<ResultPage />} />
 
+        {/* Dynamic Route mapping */}
+<Route path="/interviews/:sessionId" element={<LiveInterviewPage />} />
+
+<Route path="/interviews" element={<Navigate to={`/interviews/session-${Math.random().toString(36).substring(2, 9)}`} replace />} />
+
         {/* ================= PROTECTED ADMIN ROUTES ================= */}
-        {/* 1. Wrap Admin Routes in the Auth Guard */}
         <Route element={<AdminRequireAuth />}>
           
-          {/* 2. Then render the Layout */}
           <Route path="/admin" element={<AdminLayout />}>
             <Route index element={<Navigate to="dashboard" replace />} />
             
@@ -64,7 +72,6 @@ function AppContent() {
             <Route path="users" element={<UsersPage />} />
             <Route path="users/:id" element={<UserProfilePage />} />
             
-            {/* Note: You had duplicate 'sessions' routes in your code. I fixed it here. */}
             <Route path="sessions" element={<SessionsPage />} />
             <Route path="sessions/:id" element={<SessionDetailsPage />} />
             

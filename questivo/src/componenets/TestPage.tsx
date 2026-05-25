@@ -1,9 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { motion } from "framer-motion";
-import SafeMathRenderer from "./SafeMathRenderer"; // ✅ Safe LaTeX presentation bridge imported cleanly
-
+import { motion } from "framer-motion";//  Safe LaTeX presentation bridge imported cleanly
+import SafeMathRenderer from "./SafeMathRenderer";
 type OptionLetter = "A" | "B" | "C" | "D";
 
 type Question = {

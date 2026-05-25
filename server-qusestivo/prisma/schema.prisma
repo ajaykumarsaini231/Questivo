@@ -157,12 +157,54 @@ model ResumeAnalysis {
   missingSkills   Json     // String[]
   strengths       Json     // String[]
   weaknesses      Json     // String[]
-  
-  // 🛠️ NEW EXTENSION: Structured deep linting indicators matching ResumeWorded criteria
-// Puraani line ko isse replace karein:
+
 lintChecks      Json     @default("{}")
  suggestions     Json     // Structured suggestion map
   
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+}
+model InterviewSession {
+  id              String             @id @default(uuid())
+  userId          String             // user identifier mapping link
+  targetCompany   String             @default("Generic")
+  targetRole      String
+  experienceLevel String
+  jobDescription  String             @db.Text
+  resumeSnapshot  String             @db.Text // Extracted plaintext parsed buffer sync
+  durationMinutes Int                @default(15) // 🛠️ ADDED: Stores total allocated timing tracking metric
+  status          String             @default("active") // active, completed, terminated
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  messages        InterviewMessage[]
+  evaluation      InterviewFeedback?
+
+  @@index([userId])
+}
+
+model InterviewMessage {
+  id        String           @id @default(uuid())
+  sessionId String
+  session   InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  sender    String           // ai, candidate
+  content   String           @db.Text
+  createdAt DateTime         @default(now())
+
+  @@index([sessionId])
+}
+
+model InterviewFeedback {
+  id                 String           @id @default(uuid())
+  sessionId          String           @unique
+  session            InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  technicalScore     Int              @default(0) // Scale 0-100
+  communicationScore Int              @default(0)
+  problemSolving     Int              @default(0)
+  overallScore       Int              @default(0)
+  finalVerdict       String           @default("Average")
+  strengths          String[]
+  weaknesses         String[]
+  improvementPath    String[]
+  detailedCritique   String           @db.Text
+  createdAt          DateTime         @default(now())
 }

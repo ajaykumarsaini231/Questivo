@@ -1,0 +1,110 @@
+Here is the comprehensive, production-grade architectural breakdown of **Questivo** written fully in professional English. It connects your technical choices, core engineering workflows, and system design paradigms into an enterprise-grade technical synopsis :
+
+---
+
+# Questivo: Project Overview, Engineering Architecture, and Full-Stack Implementation
+
+## 1. System Design Philosophy & Core Problem Definition
+
+**Questivo** is an enterprise-grade, Agentic AI-driven career readiness and assessment ecosystem. It is engineered to solve a prominent bottleneck in educational technology: the automated parsing, generation, and rendering of high-stakes technical assessment questions, comprehensive ATS resume optimizations, and dynamic mock interview modules—all without transport layer formatting crashes, structural layout collapses, or infrastructure limit exhaustion.
+
+The system is split into three foundational modules:
+
+1. **Agentic Test Runner Engine:** Automates the synthesis of multi-concept technical assessment questions mimicking premium exam criteria (e.g., JEE Advanced, GATE, and NDA variants) while enforcing bulletproof LaTeX mathematical typesetting.
+2. **ATS Resume Analyzer:** Parses multi-format document templates (PDF/DOCX) using custom token linter hooks to measure keyword alignment, structurally linting resume layouts against semantic parsing configurations.
+3. **Generative Mock Interview Studio:** Uses a stateful speech-to-text and text-to-speech asynchronous polling architecture to simulate custom, domain-specific live technical interviews with real-time semantic scoring.
+
+---
+
+## 2. Full-Stack Technology Stack & Package Architecture
+
+The platform's micro-service architecture relies on explicit library dependencies configured across both package domains:
+
+### The Backend Service Infrastructure
+
+* **Node.js & Express Framework (`express`):** Standardized with native ECMAScript Modules (`"type": "module"`) to sustain performant, non-blocking asynchronous routing pipelines and native middleware staging.
+* **Prisma ORM & PostgreSQL (`prisma`, `@prisma/client`, `@prisma/adapter-pg`, `pg`):** Manages relational type-safe schema definitions against PostgreSQL storage, executing native connection pools to avoid database saturation during heavy bulk mutations.
+* **Groq Inference SDK (`groq-sdk`):** Leveraged to handle low-latency inference cycles using the **Llama 3.3 70B Versatile** model model for question synthesis, resume extraction, and speech token grading.
+* **Document Extraction Engine (`pdf-parse-fork`, `docx-parser`, `multer`, `express-fileupload`):** Stages and breaks down multi-format binaries, stripping raw unformatted text vectors from uploaded resumes or offline syllabus documents.
+* **Stateless Security Suite (`jsonwebtoken`, `bcryptjs`, `cookie-parser`, `express-rate-limit`, `joi`):** Handles stateless verification barriers, hashes password strings, checks payload input models, and blocks adversarial network saturation (DDoS) via rate limiters.
+
+### The Frontend Client Infrastructure
+
+* **React 19 Core Engine & Vite (`react`, `react-dom`, `vite`, `@vitejs/plugin-react`):** Capitalizes on next-generation concurrent rendering cycles, native single-state mutations, and a lightning-fast development runtime powered by Hot Module Replacement (HMR).
+* **React Router Dom v7 (`react-router-dom`):** Evaluates client-side state mapping across declarative partitions, separating running test configurations (`/tests/:sessionId`) from evaluation summaries (`/tests/:sessionId/result`) and career layout nodes (`/resume-ats`).
+* **Tailwind CSS v4 Ecosystem (`tailwindcss`, `@tailwindcss/vite`, `@tailwindcss/postcss`):** Next-generation utility compilation server mapping fluid layouts natively through high-performance PostCSS pipelines.
+* **KaTeX Scientific Presenter Stack (`katex`, `react-markdown`, `remark-math`, `rehype-katex`):** Processes incoming raw string fields into mathematically perfect typographic vectors on the browser interface.
+* **Framer Motion Interactivity (`framer-motion`):** Orchestrates smooth layout animations during step-by-step assessment transitions, resume scorecard expanding states, and live interview speech states.
+
+---
+
+## 3. Backend Generation Optimization & Self-Healing Pipeline
+
+The core assessment generation service handles requests by implementing a sequential, deterministic queue framework rather than firing bulk concurrent request arrays that trigger instant API rate limits.
+
+```
+[Target Count Requested] -> [Dynamic Buffer Calculation] -> [Groq API Ingress]
+                                                                   |
+                                                                   v
+[PostgreSQL Database Commits] <- [Self-Healing Filter Drops] <- [Parser Guard]
+
+```
+
+The service reads the requested question delta (`needed = totalTarget - allQuestions.length`) and clamps requests dynamically using `Math.min(needed, BATCH_SIZE)` to avoid context overflow on free inference daily budgets (100k TPD allowance). The system prompt is heavily compressed, stripping bulky static structures to lower metadata footprints by **45%** while retaining core architectural directives.
+
+Once the raw plain text dataset returns, it passes through an isolated parser method (`parseBatchQuestions`) executing an active **Defensive Filter Guard**. This guard uses a character-length regex pattern to analyze the incoming data for squashed layout text bugs (such as `Determinewhetherf`). If a block fails validation, the parser ignores it and drops it entirely.
+
+To prevent final test counts from falling short, Questivo uses a **Dynamic Gap-Filling Loop Strategy**. The parent loop tracks dropped questions in real time and automatically fires an adaptive mini-batch to backfill the gap. Right before committing records to PostgreSQL via Prisma transaction pools, piecewise functions (`\begin{cases}`) are normalized into display block symbols (`$$`), and layout artifacts like `\0` are cleanly purged.
+
+---
+
+## 4. Frontend Isolated Parsing & Typographic Rendering Bridge
+
+Once raw data fields are saved to the database, they must be rendered on the screen without text layout degradation. If text strings are translated globally, it fragments descriptive labels. To bypass this, the client interface architecture uses a custom rendering pipeline.
+
+The UI wraps question statements, multi-choice grids, resume analytics logs, and interview question breakdowns inside a **`SafeMathRenderer`** component, which handles data streams using an isolation wrapper algorithm named **`applyToTextOnly`**.
+
+```
+                        [Incoming Payload String]
+                                    |
+                    +---------------+---------------+
+                    |                               |
+          [Math Regions ($$, $)]           [Pure Text Nodes]
+                    |                               |
+                    v                               v
+             (Bypass Loop)               (Token Boundary Scanner)
+                    |                               |
+                    |                      Wraps plain operators 
+                    |                      (^, _, =, pm) into $ $
+                    |                               |
+                    +---------------+---------------+
+                                    |
+                                    v
+                        [Flawless Vector Render]
+
+```
+
+The rendering wrapper reads string inputs character-by-character to locate pre-existing markdown boundaries (`$$` and `$`) and completely isolates them from mutation loops to prevent double-wrapping errors. The matching scanner then processes only the plain text regions, dividing them into micro-token strings.
+
+The engine analyzes each token for core math patterns (`\frac`, `\sqrt`, `\langle`) as well as physics signatures (`\mu_0`, `\Delta`, `C_V`, `MR^2`). If any are found, the scanner strips layout noise, handles messy punctuation edge-cases (like trailing commas or trailing raw `$` signs), and wraps the raw expression inside crisp inline boundaries (`$ ... $`). This structural contract ensures that whether a user is looking at a live Calculus problem or a complex rotational mechanics question, the interface displays flawless, scalable typographic vectors without any performance bottlenecks.
+
+---
+
+## 5. ATS Resume Analysis & Live Interview Engineering Workflows
+
+The placement preparation aspect of Questivo bridges the gap between evaluation and industry criteria through two advanced pipelines:
+
+### ATS Analysis Loop
+
+When a candidate uploads a resume file (`.pdf` or `.docx`), `multer` pipes the binary directly into native text extractors. The system extracts raw text boundaries and maps them against the structural data models of target job descriptions. The LLM acts as an extraction agent, scoring match percentages, generating critical semantic suggestions, identifying missing keywords (e.g., specific framework configurations or cloud infrastructure dependencies), and tracking design faults. The output is pushed to the client via Prisma into an interactive Tailwind scorecard grid.
+
+### Generative Mock Interview Studio
+
+This module allows candidates to practice live technical interviews tailored to their target industry role. The engine reads user configuration flags (e.g., Frontend Engineer, System Architect, Embedded Systems) and dynamically initiates an interactive conversation thread. The AI interviewer generates contextual, scenario-based system design or coding questions. The platform captures the candidate's audio responses, converts them into text tokens, and passes them to the evaluation agent. The agent grades each answer across four operational matrices: technical accuracy, code optimization, problem-solving structure, and communication clarity. This data maps out a real-time behavioral performance matrix for the user.
+
+---
+
+## 💡 Quick Interview Tips on Presenting This Project
+
+* **Emphasize Data Integrity:** Explain how you established a clear frontend-backend contract. The backend stores clean, unmodified text nodes, while the frontend handles advanced typographic transformations dynamically. This maintains clean database tracking.
+* **Highlight Scalability and Error Isolation:** Mention that features are decoupled. A failure in the document parser pool won't block the running test runtime or active interview state modules, ensuring excellent fault tolerance under load.

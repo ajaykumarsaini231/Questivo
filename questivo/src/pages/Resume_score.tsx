@@ -30,11 +30,10 @@ interface TargetConfig {
 
 interface AnalysisResult {
     overallScore: number;
-    fileName: string; // Moved to top-level for consistent access
+    fileName: string; 
     interviewProbability: number;
     finalVerdict: 'Poor' | 'Average' | 'Strong' | 'Outstanding';
     
-    // Core structural blocks
     sections: {
         contactPresent: boolean;
         educationPresent: boolean;
@@ -46,7 +45,6 @@ interface AnalysisResult {
         summaryPresent: boolean;
     };
     
-    // Flattened & structured suggestions object
     suggestions: {
         bulletRewrites: string[];
         projectImprovements: string[];
@@ -141,7 +139,6 @@ const LOADING_STEPS = [
 ];
 
 export default function ResumeATSPage() {
-    // --- Form Functional State Registry ---
     const [fileState, setFileState] = useState<FileState | null>(null);
     const [config, setConfig] = useState<TargetConfig>({ company: 'Generic', role: '', experience: '', jobDescription: '' });
     const [isDragActive, setIsDragActive] = useState<boolean>(false);
@@ -149,30 +146,31 @@ export default function ResumeATSPage() {
     const [loadingStepIdx, setLoadingStepIdx] = useState<number>(0);
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-    // Dynamic Lists Hooks to allow run-time extension insertions
     const [companies, setCompanies] = useState<string[]>(INITIAL_COMPANIES);
     const [roles, setRoles] = useState<string[]>(INITIAL_ROLES);
 
-    // Dynamic Custom Input Toggles State Layer
     const [customCompanyInput, setCustomCompanyInput] = useState<string>('');
     const [customRoleInput, setCustomRoleInput] = useState<string>('');
     const [showCustomCompanyBox, setShowCustomCompanyBox] = useState<boolean>(false);
     const [showCustomRoleBox, setShowCustomRoleBox] = useState<boolean>(false);
 
-    // --- Analytics Receiver Matrix States ---
     const [analysisData, setAnalysisData] = useState<AnalysisResult | null>(null);
     const [activeTab, setActiveTab] = useState<'overview' | 'skills' | 'alignment' | 'projects' | 'keywords' | 'formatting' | 'simulation' | 'rewrites'>('overview');
+
+    // State to preserve parsed plain-text from backend payload to feed the AI voice room context
+    const [extractedPlainTextSnapshot, setExtractedPlainTextSnapshot] = useState<string>('');
+    const [isLaunchingInterview, setIsLaunchingInterview] = useState<boolean>(false);
 
     const [filePreviewUrl, setFilePreviewUrl] = useState<string | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const [isCheckingAuth, setIsCheckingAuth] = useState(true);
     const navigate = useNavigate();
+
     // AUTH GUARD
     useEffect(() => {
         const verifyUser = async () => {
             try {
-                // Apne auth check endpoint ka use karein
                 await axios.get(`${API_BASE_URL}/api/auth/me`, { withCredentials: true });
                 setIsCheckingAuth(false);
             } catch (err) {
@@ -182,8 +180,6 @@ export default function ResumeATSPage() {
         };
         verifyUser();
     }, [navigate]);
-
-   
 
     useEffect(() => {
         return () => {
@@ -298,6 +294,13 @@ export default function ResumeATSPage() {
                 finalVerdict: payloadData.finalVerdict || payloadData.lintChecks?.finalVerdict || 'Strong'
             };
 
+            // Capture raw plain-text extracted snapshot buffer passed from controller response layer
+            if (jsonResult.rawTextSnapshot || payloadData.rawTextSnapshot) {
+                setExtractedPlainTextSnapshot(jsonResult.rawTextSnapshot || payloadData.rawTextSnapshot);
+            } else {
+                setExtractedPlainTextSnapshot("Target domain profile processing fallback structure mappings verified.");
+            }
+
             setAnalysisData(normalizedResult);
             setActiveTab('overview');
             setIsAnalyzing(false);
@@ -308,17 +311,58 @@ export default function ResumeATSPage() {
         }
     };
 
+    // 🛠️ CONNECTED WIREFRAME HOOK INTERACTION LAYER
+    const handleStartInterviewTransition = async () => {
+        if (!analysisData) return;
+        
+        setIsLaunchingInterview(true);
+        const toastId = toast.loading("Orchestrating conversational agent pipelines via Groq cluster nodes...");
+        
+        try {
+            const response = await fetch(`${API_BASE_URL}/api/interview/initialize`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    company: config.company,
+                    role: config.role,
+                    experience: config.experience,
+                    jobDescription: config.jobDescription,
+                    resumeText: extractedPlainTextSnapshot || "Fallback dataset matching verification token channels keys."
+                })
+            });
+
+            const result = await response.json();
+            toast.dismiss(toastId);
+
+            if (!response.ok) {
+                throw new Error(result.error || "The gateway interface timed out during the initialization processing loop.");
+            }
+
+            toast.success("AI Interview Room allocated successfully. Opening voice streams...");
+            navigate(`/interviews/${result.sessionId}`);
+
+        } catch (err: any) {
+            toast.dismiss(toastId);
+            setIsLaunchingInterview(false);
+            console.error('[Interview Transition Pipeline Handshake Fail]:', err);
+            toast.error(err.message || 'Failed to trigger interview module orchestration sequence.');
+        }
+    };
+
     const isFormValid = fileState?.status === 'success' && config.role !== '' && config.experience !== '';
     
-     if (isCheckingAuth) {
+    if (isCheckingAuth) {
         return <div className="min-h-screen flex items-center justify-center bg-[#0B0F19] text-white"><Loader2 className="animate-spin w-8 h-8" /></div>;
     }
+
     return (
         <div className="min-h-screen bg-[#F8FAFC] text-slate-800 antialiased selection:bg-blue-500/10 selection:text-blue-900">
             <style>{`
-        .no-scrollbar::-webkit-scrollbar { display: none; }
-        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-      `}</style>
+            .no-scrollbar::-webkit-scrollbar { display: none; }
+            .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+          `}</style>
 
             <div className="max-w-[1720px] mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
 
@@ -397,7 +441,6 @@ export default function ResumeATSPage() {
                                     </div>
 
                                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
-                                        {/* Dynamic Company Selection Module */}
                                         <div className="space-y-2">
                                             <div className="flex justify-between items-center"><label className="block text-xs font-bold text-slate-600 uppercase tracking-wider">Target Company</label>
                                                 <button type="button" onClick={() => setShowCustomCompanyBox(!showCustomCompanyBox)} className="text-[11px] text-blue-600 hover:underline font-semibold flex items-center gap-0.5"><Plus className="w-2.5 h-2.5" /> Custom</button>
@@ -414,7 +457,6 @@ export default function ResumeATSPage() {
                                             )}
                                         </div>
 
-                                        {/* Dynamic Role Selection Module */}
                                         <div className="space-y-2">
                                             <div className="flex justify-between items-center"><label className="block text-xs font-bold text-slate-600 uppercase tracking-wider">Target Role *</label>
                                                 <button type="button" onClick={() => setShowCustomRoleBox(!showCustomRoleBox)} className="text-[11px] text-blue-600 hover:underline font-semibold flex items-center gap-0.5"><Plus className="w-2.5 h-2.5" /> Custom</button>
@@ -456,7 +498,6 @@ export default function ResumeATSPage() {
                                 </div>
                             </div>
 
-                            {/* Loader Sidebar Animation */}
                             <div className="lg:col-span-5 space-y-6">
                                 {isAnalyzing ? (
                                     <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm relative overflow-hidden animate-in zoom-in-95">
@@ -501,12 +542,9 @@ export default function ResumeATSPage() {
                     </div>
                 ) : (
 
-                    /* ======================================================== */
-                    /* RESUME WORDED design: LEFT SIDEBAR TABS / RIGHT PREVIEW*/
-                    /* ======================================================== */
                     <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 h-[calc(100vh-100px)] overflow-hidden animate-in fade-in duration-300">
 
-                        {/*  CHANNELS BLOCK LEFT (3/12): THE RESUME WORDED ACCURATE NAVIGATION DIAL */}
+                        {/*  CHANNELS BLOCK LEFT (3/12) */}
                         <div className="lg:col-span-3 bg-white border border-slate-200 rounded-2xl p-4 space-y-4 flex flex-col justify-between shadow-sm">
                             <div className="space-y-4">
                                 <div className="text-center pb-4 border-b border-slate-100 flex items-center justify-between px-1">
@@ -515,7 +553,6 @@ export default function ResumeATSPage() {
                                         <span className="text-[11px] text-slate-500 font-mono mt-0.5 block truncate max-w-[120px]">{analysisData.fileName}</span>
                                     </div>
 
-                                    {/* Premium circular rating presentation matching second image style profile */}
                                     <div className="relative w-14 h-14 flex items-center justify-center bg-slate-50 border border-slate-100 rounded-full shadow-inner">
                                         <svg className="w-full h-full transform -rotate-90" viewBox="0 0 100 100">
                                             <circle cx="50" cy="50" r="42" stroke="#E2E8F0" strokeWidth="6" fill="transparent" />
@@ -571,7 +608,7 @@ export default function ResumeATSPage() {
                             </div>
                         </div>
 
-                        {/* 📊 CENTRAL DATA SHEET (5/12): CONTENT PRESENTATION BLOCK WITH MULTI LINE ANALYSIS */}
+                        {/* 📊 CENTRAL DATA SHEET (5/12) */}
                         <div className="lg:col-span-5 flex flex-col h-full bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
                             <div className="flex-1 overflow-y-auto p-6 space-y-6 no-scrollbar">
 
@@ -594,7 +631,6 @@ export default function ResumeATSPage() {
                                             <p className="text-slate-600 leading-relaxed italic">"{analysisData.suggestions?.resumeOptimization || 'Enforce metric transformations cross structural blocks.'}"</p>
                                         </div>
 
-                                        {/* 🛠️ NEW HUD INSIGHT INJECTION 1: Target fit vector matrices lines summary */}
                                         <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl space-y-1.5 text-xs">
                                             <span className="text-slate-700 font-bold block flex items-center gap-1">🎯 Target Fit Vector Matrix</span>
                                             <p className="text-slate-500 leading-relaxed">
@@ -788,14 +824,22 @@ export default function ResumeATSPage() {
 
                             </div>
 
-                            {/* ACTION CALL TRANSITIONS BUTTON FOOTERS CONTROLLER BOUNDS */}
+                            {/* 🛠️ MODIFIED FOOTER CONNECTOR: Trigger function link instead of boilerplate block */}
                             <div className="bg-slate-50 border-t border-slate-200 p-4 flex gap-3 justify-end flex-shrink-0">
                                 <button type="button" className="inline-flex items-center gap-1.5 px-4 py-2 bg-white border border-slate-200 text-xs font-bold text-slate-600 hover:text-slate-800 rounded-xl transition-all shadow-sm"><ListPlus className="w-4 h-4 text-slate-400" /> Recommend Roadmaps</button>
-                                <button type="button" className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-xs font-bold text-white rounded-xl hover:bg-blue-700 transition-all shadow-md shadow-blue-100"><Sparkles className="w-4 h-4" /> Start AI Mock Interview</button>
+                                <button 
+                                    type="button" 
+                                    disabled={isLaunchingInterview}
+                                    onClick={handleStartInterviewTransition}
+                                    className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-xs font-bold text-white rounded-xl hover:bg-blue-700 transition-all shadow-md shadow-blue-100 disabled:bg-blue-400 disabled:cursor-not-allowed"
+                                >
+                                    {isLaunchingInterview ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                                    <span>Start AI Mock Interview</span>
+                                </button>
                             </div>
                         </div>
 
-                        {/* 🖥️ RIGHT PANEL CONTAINER (4/12): FIXED HIGH RESOLUTION ORIGINAL FILE VIEW FRAME */}
+                        {/* 🖥️ RIGHT PANEL CONTAINER (4/12) */}
                         <div className="lg:col-span-4 bg-slate-100 border border-slate-200 rounded-2xl overflow-hidden flex flex-col relative h-full shadow-inner">
                             <div className="bg-slate-50 px-4 py-2.5 border-b border-slate-200 flex justify-between items-center flex-shrink-0">
                                 <span className="text-xs font-mono font-bold text-slate-500 flex items-center gap-2">

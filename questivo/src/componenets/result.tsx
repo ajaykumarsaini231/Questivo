@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { CheckCircle, XCircle, AlertCircle, ArrowLeft, BarChart3, HelpCircle, BookOpen } from "lucide-react";
-import Header from "./Header"
+import Header from "./Header";
+import SafeMathRenderer from "./SafeMathRenderer"; // ✅ Imported Safe Math presentation bridge cleanly
 // --- Types ---
 type BreakdownItem = {
   questionId: string;
@@ -173,25 +174,30 @@ function QuestionReview({ item }: { item: BreakdownItem }) {
     <div className="border border-slate-200 rounded-xl p-6 bg-white shadow-sm">
       {/* Question Header */}
       <div className="flex items-start justify-between mb-4">
-        <div>
-          <span className="text-xs font-bold text-slate-400 uppercase tracking-wide">Question {item.indexInSession}</span>
-          <p className="font-medium text-slate-800 mt-1 text-lg">{item.questionText}</p>
+        <div className="flex-1">
+          <span className="block text-xs font-bold text-slate-400 uppercase tracking-wide">Question {item.indexInSession}</span>
+          {/* ✅ FIX 1: Render historical review question title safely via LaTeX container */}
+          <div className="font-medium text-slate-800 mt-1 text-lg leading-relaxed">
+            <SafeMathRenderer text={item.questionText} />
+          </div>
         </div>
 
         {/* Status Badge */}
-        {notAttempted ? (
-          <span className="flex items-center gap-1 text-xs px-2.5 py-1 bg-slate-100 text-slate-600 font-medium rounded-full border border-slate-200">
-            <AlertCircle size={14}/> Not Attempted
-          </span>
-        ) : item.isCorrect ? (
-          <span className="flex items-center gap-1 text-xs px-2.5 py-1 bg-emerald-50 text-emerald-700 font-medium rounded-full border border-emerald-100">
-            <CheckCircle size={14}/> Correct
-          </span>
-        ) : (
-          <span className="flex items-center gap-1 text-xs px-2.5 py-1 bg-rose-50 text-rose-700 font-medium rounded-full border border-rose-100">
-            <XCircle size={14}/> Incorrect
-          </span>
-        )}
+        <div className="ml-4 flex-shrink-0">
+          {notAttempted ? (
+            <span className="flex items-center gap-1 text-xs px-2.5 py-1 bg-slate-100 text-slate-600 font-medium rounded-full border border-slate-200">
+              <AlertCircle size={14}/> Not Attempted
+            </span>
+          ) : item.isCorrect ? (
+            <span className="flex items-center gap-1 text-xs px-2.5 py-1 bg-emerald-50 text-emerald-700 font-medium rounded-full border border-emerald-100">
+              <CheckCircle size={14}/> Correct
+            </span>
+          ) : (
+            <span className="flex items-center gap-1 text-xs px-2.5 py-1 bg-rose-50 text-rose-700 font-medium rounded-full border border-rose-100">
+              <XCircle size={14}/> Incorrect
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Options List */}
@@ -213,18 +219,21 @@ function QuestionReview({ item }: { item: BreakdownItem }) {
 
           return (
             <div key={opt} className={containerClass}>
-              <div className="flex items-center gap-4">
-                <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm ${
+              <div className="flex items-center gap-4 min-w-0 flex-1">
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm flex-shrink-0 ${
                     isCorrect ? "bg-emerald-500 text-white" : 
                     isSelected ? "bg-rose-500 text-white" : 
                     "bg-slate-100 text-slate-500"
                 }`}>
                   {opt}
                 </div>
-                <div className={`text-sm ${isCorrect || isSelected ? "font-medium text-slate-800" : "text-slate-600"}`}>{text}</div>
+                {/* ✅ FIX 2: Render individual choice items dynamically without token clipping */}
+                <div className={`text-sm pr-2 overflow-x-auto ${isCorrect || isSelected ? "font-medium text-slate-800" : "text-slate-600"}`}>
+                  <SafeMathRenderer text={text} />
+                </div>
               </div>
 
-              <div className="text-xs font-semibold px-2">
+              <div className="text-xs font-semibold px-2 flex-shrink-0 whitespace-nowrap">
                 {isCorrect && <span className="text-emerald-600">Correct Answer</span>}
                 {isSelected && !isCorrect && <span className="text-rose-600">Your Answer</span>}
               </div>
@@ -239,7 +248,10 @@ function QuestionReview({ item }: { item: BreakdownItem }) {
             <h4 className="text-xs font-bold text-blue-600 uppercase mb-1 flex items-center gap-2">
                 <BookOpen size={14} /> Explanation
             </h4>
-            <p className="text-sm text-slate-700 leading-relaxed">{item.explanation}</p>
+            {/* ✅ FIX 3: Render comprehensive proofs/derivations arrays with high fidelity */}
+            <div className="text-sm text-slate-700 leading-relaxed overflow-x-auto">
+              <SafeMathRenderer text={item.explanation} />
+            </div>
         </div>
       )}
     </div>
