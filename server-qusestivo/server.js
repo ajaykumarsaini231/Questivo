@@ -19,6 +19,7 @@ import interviewRoutes from "./src/routes/interviewRoutes.js";
 // Sockets
 import { initializeInterviewSocket } from "./src/agentic-mock-test/interviewSocket.js"; // 🛠️ Import your socket logic
 import { credentialReport } from "./src/lib/aiClient.js";
+import gmailSetupRoutes from "./src/routes/gmailSetupRoutes.js";
 
 dotenv.config();
 
@@ -48,8 +49,35 @@ app.use("/api/auth", authrouter);
 app.use("/api/user", userroter);
 app.use("/api/admin", adminRoutes);
 
+// Gmail OAuth setup. Mounted at the root so /oauth2callback matches the
+// redirect URI already registered in Google Cloud Console.
+app.use(gmailSetupRoutes);
+
 app.get("/", (req, res) => {
   res.send("Mock test API running");
+});
+
+/**
+ * Mail health. Tells you whether the Gmail credentials in THIS environment can
+ * mint an access token — the check that matters, because a token minted
+ * against a different client verifies locally and still fails here.
+ */
+app.get("/api/mail/health", async (req, res) => {
+  if (!process.env.Secret_Token || req.headers["x-admin-token"] !== process.env.Secret_Token) {
+    return res.status(401).json({ error: "unauthorized" });
+  }
+  try {
+    const { verifyMailTransport } = await import("./config/gmail.js");
+    const transport = await verifyMailTransport();
+    res.json({ ok: true, transport, sender: process.env.MAIL_FROM || null });
+  } catch (err) {
+    res.status(503).json({
+      ok: false,
+      error: err.message,
+      clientId: (process.env.GOOGLE_CLIENT_ID || "").split("-")[0] || null,
+      hint: "Re-mint at /api/gmail/setup?token=<Secret_Token> ON THIS SERVER, then set GOOGLE_REFRESH_TOKEN here.",
+    });
+  }
 });
 
 /**
