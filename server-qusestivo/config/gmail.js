@@ -83,10 +83,28 @@ function formatGmailError(err) {
     );
   }
   if (err?.code === 403 || err?.status === 403) {
-    return (
-      "Gmail API refused the request (403). Check the Gmail API is enabled for " +
-      "this project and the token carries the gmail.send scope."
-    );
+    // Google's own 403 body distinguishes "API switched off in the project"
+    // from "token lacks the scope". Those need opposite fixes — enabling an API
+    // versus re-minting a token — so surface the real reason and Google's own
+    // link instead of a generic message that fits both.
+    const info = err?.response?.data?.error;
+    const reason = info?.errors?.[0]?.reason;
+    const project = String(process.env.GOOGLE_CLIENT_ID || "").split("-")[0];
+
+    if (reason === "accessNotConfigured") {
+      return (
+        "The Gmail API is not enabled for this Google Cloud project. Enable it, " +
+        "wait a minute for it to propagate, then retry:\n  " +
+        `https://console.cloud.google.com/apis/library/gmail.googleapis.com?project=${project}`
+      );
+    }
+    if (reason === "insufficientPermissions") {
+      return (
+        "The token does not carry the gmail.send scope. Re-mint it with " +
+        "`node scripts/googleRefreshToken.mjs --force` and approve the send permission."
+      );
+    }
+    return `Gmail API refused the request (403): ${info?.message || reason || "unknown reason"}`;
   }
   return `Could not send email (${desc || code || err?.message || "unknown error"}).`;
 }

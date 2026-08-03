@@ -35,10 +35,18 @@ const SCOPES = [
   "https://www.googleapis.com/auth/drive.readonly",
 ];
 
-/** Shared-secret gate. This endpoint mints credentials; it must not be public. */
+/**
+ * Shared-secret gate. This endpoint mints credentials; it must not be public.
+ *
+ * `state` matters: the callback is invoked BY GOOGLE, so it cannot carry a
+ * query param we chose. Google does round-trip `state` verbatim, which is how
+ * the secret survives the redirect — the same mechanism METNMAT uses to carry
+ * the mailbox role. Without this the callback answered 401 and the operator had
+ * to exchange the code by hand.
+ */
 function requireSecret(req, res) {
   const expected = process.env.Secret_Token;
-  const supplied = req.query.token || req.headers["x-admin-token"];
+  const supplied = req.query.token || req.query.state || req.headers["x-admin-token"];
   if (!expected) {
     res.status(500).send(page("Not configured", "<p>Set <code>Secret_Token</code> in the environment first.</p>"));
     return false;
@@ -87,6 +95,8 @@ router.get("/api/gmail/setup", (req, res) => {
     prompt: "consent",
     include_granted_scopes: true,
     scope: SCOPES,
+    // Carries the gate secret through Google and back to /oauth2callback.
+    state: process.env.Secret_Token,
     ...(hint ? { login_hint: hint } : {}),
   });
 
@@ -99,7 +109,8 @@ router.get("/oauth2callback", async (req, res) => {
   if (!requireSecret(req, res)) return;
 
   const { code, error } = req.query;
-  const retry = `/api/gmail/setup?token=${encodeURIComponent(req.query.token || "")}`;
+  const secret = req.query.token || req.query.state || "";
+  const retry = `/api/gmail/setup?token=${encodeURIComponent(secret)}`;
 
   if (error) return res.send(page("Authorisation denied", `<p>Google returned: <strong>${esc(String(error))}</strong></p><p><a href="${retry}">Try again</a></p>`));
   if (!code) return res.send(page("Missing code", `<p>No <code>code</code> in the URL. Start at <a href="${retry}">Connect Gmail</a>.</p>`));

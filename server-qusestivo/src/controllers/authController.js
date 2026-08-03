@@ -10,6 +10,22 @@ import {
 import { doHash, dohashValidation, hmacProcess } from "../utills/hashing.js";
 import { transport } from "../middleware/sendmail.js";
 
+/**
+ * Strip secrets before a user row crosses the network.
+ *
+ * signin/signup/me were returning the Prisma row verbatim, which shipped
+ * passwordHash (bcrypt) and otpHash to the browser. A password hash in a
+ * response body can be harvested and attacked offline at the attacker's
+ * leisure, and the OTP hash undermines the second factor. Neither is ever
+ * needed by the client.
+ */
+const publicUser = (u) => {
+  if (!u) return u;
+  const { passwordHash, otpHash, otpExpiresAt, otpPurpose, ...safe } = u;
+  return safe;
+};
+
+
 const OTP_SECRET = process.env.HMAC_VARIFICATION_CODE_SECRET;
 
 if (!OTP_SECRET) {
@@ -147,7 +163,7 @@ export const verifySignupOtp = async (req, res) => {
 
     const token = signJwt({ userId: user.id });
     res.cookie("token", token, COOKIE_OPTS);
-    res.json({ success: true, user });
+    res.json({ success: true, user: publicUser(user) });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Server error" });
@@ -174,7 +190,7 @@ export const signin = async (req, res) => {
 
     const token = signJwt({ userId: user.id });
     res.cookie("token", token, COOKIE_OPTS);
-    res.json({ success: true, user });
+    res.json({ success: true, user: publicUser(user) });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Server error" });
@@ -279,7 +295,7 @@ export const verifyLoginOtp = async (req, res) => {
 
     const token = signJwt({ userId: user.id });
     res.cookie("token", token, COOKIE_OPTS);
-    res.json({ success: true, user });
+    res.json({ success: true, user: publicUser(user) });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Server error" });
@@ -470,7 +486,7 @@ export const googleAuth = async (req, res) => {
 
     const token = signJwt({ userId: user.id });
     res.cookie("token", token, COOKIE_OPTS);
-    res.json({ success: true, user });
+    res.json({ success: true, user: publicUser(user) });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "OAuth failed" });
@@ -511,7 +527,7 @@ export const me = async (req, res) => {
       return res.status(401).json({ message: "User not found" });
     }
 
-    return res.json({ user });
+    return res.json({ user: publicUser(user) });
   } catch (err) {
     console.error("ME UNKNOWN ERROR:", err);
     return res.status(500).json({ message: "Server error" });

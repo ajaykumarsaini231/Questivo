@@ -41,7 +41,28 @@ const SCOPE = [
   "https://www.googleapis.com/auth/gmail.send",
   "https://www.googleapis.com/auth/drive.readonly",
 ].join(" ");
-const LOCAL_PORT = Number(process.env.OAUTH_LOCAL_PORT || 5555);
+/**
+ * Listen on the port the configured redirect URI actually names.
+ *
+ * This used to be hard-coded to 5555 while the auth URL was built from
+ * GOOGLE_REDIRECT_URI. With that set to http://localhost:5173/oauth2callback,
+ * Google was told to redirect to 5173 while the script waited on 5555 — so even
+ * a successful consent could never be captured, and the script just hung.
+ */
+function localPortFrom(uri) {
+  try {
+    const u = new URL(uri);
+    if (u.hostname === "localhost" || u.hostname === "127.0.0.1") {
+      return Number(u.port || 80);
+    }
+  } catch {
+    /* not a URL; fall through to the default */
+  }
+  return null;
+}
+
+const LOCAL_PORT =
+  localPortFrom(CONFIGURED_REDIRECT) || Number(process.env.OAUTH_LOCAL_PORT || 5555);
 const LOCAL_REDIRECT = `http://localhost:${LOCAL_PORT}/oauth2callback`;
 
 if (!CLIENT_ID || !CLIENT_SECRET) {
@@ -245,14 +266,39 @@ if (!newToken) {
 }
 
 const replaced = saveRefreshToken(newToken);
+
+/**
+ * Re-read from disk and confirm the value actually landed.
+ *
+ * A previous run reported "GOOGLE_REFRESH_TOKEN updated in .env" while the file
+ * on disk still held the old token, so the operator trusted a write that had not
+ * happened. Verifying the in-memory string proves nothing about the file; only
+ * reading it back does.
+ */
+const onDisk = fs.readFileSync(ENV_PATH, "utf8");
+const savedLine = onDisk.split(/\r?\n/).find((l) => /^\s*GOOGLE_REFRESH_TOKEN\s*=/.test(l)) || "";
+const savedValue = savedLine.slice(savedLine.indexOf("=") + 1).trim();
+const persisted = savedValue === newToken;
+
 const verify = await checkToken(newToken);
 
-console.log("\n" + "=".repeat(48));
-console.log(replaced ? "GOOGLE_REFRESH_TOKEN updated in .env" : "GOOGLE_REFRESH_TOKEN appended to .env");
-console.log("Backup written to .env.backup");
-console.log("Verification:", verify.ok ? "new token works" : "FAILED - " + verify.body.error);
-console.log("Granted scope:", exchanged.body.scope);
-console.log("=".repeat(48));
+console.log("\n" + "=".repeat(60));
+console.log(replaced ? "GOOGLE_REFRESH_TOKEN updated" : "GOOGLE_REFRESH_TOKEN appended");
+console.log("  file          :", ENV_PATH);
+console.log("  persisted     :", persisted ? "YES - value re-read from disk matches" : "NO - THE FILE DOES NOT CONTAIN THE NEW TOKEN");
+console.log("  token works   :", verify.ok ? "yes" : "NO - " + verify.body.error);
+console.log("  granted scope :", exchanged.body.scope);
+console.log("=".repeat(60));
+
+if (!persisted) {
+  console.log(
+    "\n  The write did not land. Usual causes:\n" +
+      "    - an editor has .env open and saved an older buffer over it\n" +
+      "    - the process lacks write permission on the file\n" +
+      "  Paste this line into .env by hand:\n\n" +
+      `    GOOGLE_REFRESH_TOKEN=${newToken}\n`
+  );
+}
 console.log(
   "\nIMPORTANT: if your OAuth consent screen is in 'Testing', this token stops\n" +
     "working in 7 days. Google Cloud Console > APIs & Services > OAuth consent\n" +
