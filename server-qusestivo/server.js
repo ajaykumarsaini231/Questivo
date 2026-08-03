@@ -18,6 +18,7 @@ import interviewRoutes from "./src/routes/interviewRoutes.js";
 
 // Sockets
 import { initializeInterviewSocket } from "./src/agentic-mock-test/interviewSocket.js"; // 🛠️ Import your socket logic
+import { credentialReport } from "./src/lib/aiClient.js";
 
 dotenv.config();
 
@@ -49,6 +50,29 @@ app.use("/api/admin", adminRoutes);
 
 app.get("/", (req, res) => {
   res.send("Mock test API running");
+});
+
+/**
+ * AI credential pool status. Shows which keys are live, cooling down after a
+ * rate limit, or disabled because the token expired. Never returns key values.
+ *
+ * Guarded by Secret_Token: the provider list and failure counts are useful
+ * operational detail that does not need to be public.
+ */
+app.get("/api/ai/health", (req, res) => {
+  const token = req.headers["x-admin-token"];
+  if (!process.env.Secret_Token || token !== process.env.Secret_Token) {
+    return res.status(401).json({ error: "unauthorized" });
+  }
+  const credentials = credentialReport();
+  res.json({
+    ok: credentials.some((c) => c.state === "ready"),
+    total: credentials.length,
+    ready: credentials.filter((c) => c.state === "ready").length,
+    coolingDown: credentials.filter((c) => c.state === "cooling-down").length,
+    disabled: credentials.filter((c) => c.state === "disabled").length,
+    credentials,
+  });
 });
 
 const PORT = process.env.PORT || 4000;

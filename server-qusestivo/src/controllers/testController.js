@@ -109,6 +109,9 @@ export async function generateTest(req, res) {
       optionD: q.option_d,
       correctOption: q.correct_option,
       explanation: q.explanation || "",
+      diagramSvg: q.diagram_svg || null,
+      diagramImage: q.diagram_image || null,
+      diagramSource: q.diagram_source || null,
     }));
 
     await prisma.testQuestion.createMany({ data: questionData });
@@ -128,6 +131,9 @@ export async function generateTest(req, res) {
         optionB: true,
         optionC: true,
         optionD: true,
+        diagramSvg: true,
+        diagramImage: true,
+        diagramSource: true,
       },
     });
 
@@ -182,6 +188,9 @@ export async function getTest(req, res) {
         optionB: true,
         optionC: true,
         optionD: true,
+        diagramSvg: true,
+        diagramImage: true,
+        diagramSource: true,
       },
     });
 
@@ -369,6 +378,9 @@ export async function getQuestionByIndex(req, res) {
         optionB: true,
         optionC: true,
         optionD: true,
+        diagramSvg: true,
+        diagramImage: true,
+        diagramSource: true,
       },
     });
 

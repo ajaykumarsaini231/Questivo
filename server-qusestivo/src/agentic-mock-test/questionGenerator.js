@@ -1,18 +1,35 @@
-import Groq from "groq-sdk";
+// Model and credentials are resolved by the failover client, which rotates
+// across every configured API key/provider. Adding another key to .env widens
+// the pool with no change here. See src/lib/aiClient.js.
+import { chat, ROLES } from "../lib/aiClient.js";
+import {
+  buildPatternBrief,
+  getMarkingScheme,
+  buildSectionPlan,
+  describeSection,
+} from "./examPatterns.js";
+import { topicsForSubject, allTopics } from "./examSyllabus.js";
+import { sanitizeSvg } from "../lib/sanitizeSvg.js";
+import { findDiagramInDrive } from "../lib/driveDiagrams.js";
 
-if (!process.env.GROQ_API_KEY) {
-  throw new Error("GROQ_API_KEY is missing in .env file");
-}
-
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-
-const MODEL_NAME = "llama-3.3-70b-versatile";
+const NEWLINE = String.fromCharCode(10);
 
 
 /* ================= CONFIGURATION ================= */
 // Reduced batch size to stay under rate limits (Safe Zone)
 const MAX_BATCH_SIZE = 15;
 const MAX_TOTAL_RETRIES = 5;
+
+// Independently re-solve each question and drop any whose stated answer does
+// not survive. Benchmarking on 2026-08-03 caught both llama-3.3-70b-versatile
+// and gpt-oss-120b confidently emitting an answer key that was not among the
+// options at all — a wrong key is worse for a candidate than a missing
+// question, because it teaches the mistake.
+const VERIFY_ANSWER_KEYS = process.env.AI_VERIFY_ANSWER_KEYS !== "false";
+// Verification runs concurrently, but the client is sticky — it sends every
+// in-flight call to the same known-good credential, so a high fan-out just
+// rate-limits that one key instantly. 2 measured better than 4 here.
+const VERIFY_CONCURRENCY = Number(process.env.AI_VERIFY_CONCURRENCY || 2);
 
 export async function generateQuestionsAgent({
   examType,
@@ -23,7 +40,20 @@ export async function generateQuestionsAgent({
   medium = "English",
 }) {
   let totalTarget = Number(numQuestions) || 10;
-  if (totalTarget > 100) totalTarget = 100;
+  // A real full paper can exceed 100 (NEET is 180), so the cap only applies to
+  // ad-hoc practice sets, not to a full mock test.
+  if (totalTarget > 100 && sessionType !== "full") totalTarget = 100;
+
+  // A full mock test must reproduce THIS exam's paper: its section split, its
+  // question types, its marking. Anything else is a generic quiz wearing the
+  // exam's name.
+  const plan = buildSectionPlan(examType, totalTarget);
+  const wantsFullPaper =
+    plan && (sessionType === "full" || totalTarget >= plan.totalQuestions);
+
+  if (plan && wantsFullPaper) {
+    return generateFullPaper({ examType, plan, difficulty, medium, topics });
+  }
 
   console.log(
     `[Groq] Generating Questions (Token Saver Mode). Target: ${totalTarget}`
@@ -47,6 +77,7 @@ export async function generateQuestionsAgent({
         count: currentBatchSize,
         difficulty,
         medium,
+        totalTarget,
       });
 
       const uniqueBatch = deduplicateAgainstList(batchQuestions, allQuestions);
@@ -67,14 +98,219 @@ export async function generateQuestionsAgent({
     loopCount++;
   }
 
-  const finalQuestions = deduplicateQuestions(allQuestions).slice(
-    0,
-    totalTarget
-  );
-  return finalQuestions.map((q, i) => ({
+  let finalQuestions = deduplicateQuestions(allQuestions).slice(0, totalTarget);
+
+  if (VERIFY_ANSWER_KEYS && finalQuestions.length > 0) {
+    finalQuestions = await verifyAnswerKeys(finalQuestions);
+  }
+
+  finalQuestions = await attachDriveDiagrams(finalQuestions);
+
+  const numbered = finalQuestions.map((q, i) => ({
     ...q,
     question_text: `Question ${i + 1}: ${q.question_text}`,
   }));
+
+  // Attach the exam's marking scheme so the result screen can score the paper
+  // the way the real exam does instead of assuming +1/0.
+  const marking = getMarkingScheme(examType);
+  if (marking) {
+    Object.defineProperty(numbered, "markingScheme", {
+      value: marking,
+      enumerable: false,
+    });
+  }
+  return numbered;
+}
+
+/* ================= FULL PAPER (SECTION-AWARE) ================= */
+
+/**
+ * Generate a paper section by section, each with its own question type,
+ * marking and syllabus topics.
+ *
+ * JEE Main comes out 20 MCQ + 5 numerical per subject; NEET comes out 45/45/90
+ * single-correct; GATE mixes MCQ, MSQ and NAT with negative marking only on the
+ * MCQs. The section plan drives all of it — no exam shares another's shape.
+ */
+async function generateFullPaper({ examType, plan, difficulty, medium, topics }) {
+  console.log(
+    `[Paper] ${plan.exam}: ${plan.totalQuestions} questions across ${plan.blocks.length} sections` +
+      `${plan.isFullPaper ? " (full paper)" : " (scaled practice set)"}`
+  );
+
+  const collected = [];
+
+  for (const block of plan.blocks) {
+    // Topics come from the section's own subject, so a Physics section cannot
+    // quietly fill itself with Chemistry.
+    const subject = block.subjects?.[0];
+    let blockTopics =
+      (subject && topicsForSubject(plan.key, subject)) || allTopics(plan.key) || [];
+    if (!blockTopics.length) blockTopics = topics?.length ? topics : [subject || "General"];
+
+    let got = 0;
+    let attempts = 0;
+    while (got < block.count && attempts < 4) {
+      const need = Math.min(block.count - got, MAX_BATCH_SIZE);
+      try {
+        const batch = await fetchBatchFromGroq({
+          examType,
+          topics: blockTopics,
+          count: need,
+          difficulty,
+          medium,
+          totalTarget: plan.totalQuestions,
+          section: block,
+        });
+        const unique = deduplicateAgainstList(batch, collected);
+        // Tag every question with the section it belongs to so the UI and the
+        // scorer know which marking rule applies.
+        for (const q of unique.slice(0, block.count - got)) {
+          collected.push({
+            ...q,
+            section_name: block.name,
+            question_type: block.type,
+            marks_correct: block.marksCorrect,
+            marks_incorrect: block.marksIncorrect,
+          });
+          got++;
+        }
+        console.log(`  ${block.name}: ${got}/${block.count}`);
+      } catch (err) {
+        console.error(`  ${block.name} batch failed: ${err.message}`);
+      }
+      attempts++;
+      if (got < block.count) await new Promise((r) => setTimeout(r, 2500));
+    }
+  }
+
+  let final = deduplicateQuestions(collected);
+  if (VERIFY_ANSWER_KEYS && final.length > 0) {
+    // Only single-correct MCQs can be checked by re-solving into A-D.
+    const checkable = final.filter((q) => (q.question_type || "mcq_single") === "mcq_single");
+    const rest = final.filter((q) => (q.question_type || "mcq_single") !== "mcq_single");
+    const kept = await verifyAnswerKeys(checkable);
+    // Preserve the section order rather than dumping verified ones first.
+    const keptIds = new Set(kept.map((q) => q.id));
+    final = final.filter((q) => keptIds.has(q.id) || rest.includes(q));
+  }
+
+  final = await attachDriveDiagrams(final);
+
+  const numbered = final.map((q, i) => ({
+    ...q,
+    question_text: `Question ${i + 1}: ${q.question_text}`,
+  }));
+
+  const marking = getMarkingScheme(examType);
+  Object.defineProperty(numbered, "markingScheme", {
+    value: { ...marking, sectionPlan: plan },
+    enumerable: false,
+  });
+  return numbered;
+}
+
+/* ================= DIAGRAM SOURCING ================= */
+
+/**
+ * Attach a figure to every question that needs one, preferring a real image
+ * from Drive over a model-drawn SVG:
+ *
+ *   needs a diagram? -> search Drive -> found? -> download and use it
+ *                                    -> not found -> keep the generated SVG
+ *
+ * "Needs a diagram" is taken from the model's own judgement: it was told to
+ * emit a Diagram: line for figure-dependent topics, so a question carrying an
+ * SVG is one it decided needed a figure. Drive is then given the chance to
+ * beat it with something a human drew.
+ *
+ * Runs after generation so a slow Drive call never blocks question output, and
+ * every failure path leaves the SVG in place.
+ */
+async function attachDriveDiagrams(questions) {
+  const candidates = questions.filter((q) => q.diagram_svg);
+  if (!candidates.length) return questions;
+
+  let replaced = 0;
+  for (const q of candidates) {
+    const hit = await findDiagramInDrive(q.topic, q.question_text);
+    if (!hit) continue; // keep the generated SVG
+    q.diagram_image = hit.dataUri;
+    q.diagram_source = "drive";
+    q.diagram_name = hit.name;
+    // Drop the SVG so the UI does not render two figures for one question.
+    q.diagram_svg = null;
+    replaced++;
+  }
+  if (replaced) {
+    console.log(`🖼  Drive supplied ${replaced}/${candidates.length} diagrams; rest use generated SVG.`);
+  }
+  return questions;
+}
+
+/* ================= ANSWER-KEY VERIFICATION ================= */
+
+/**
+ * Re-solve every question with a different model family and drop the ones whose
+ * stated key does not hold up.
+ *
+ * Deliberately conservative: a question is only discarded when the verifier
+ * commits to a different option. An unparseable or errored verification keeps
+ * the question, because losing a good question is a smaller harm than the
+ * pipeline silently emptying itself when the verifier is rate limited.
+ */
+async function verifyAnswerKeys(questions) {
+  const kept = [];
+  let dropped = 0;
+
+  for (let i = 0; i < questions.length; i += VERIFY_CONCURRENCY) {
+    const slice = questions.slice(i, i + VERIFY_CONCURRENCY);
+    const verdicts = await Promise.all(
+      slice.map(async (q) => {
+        try {
+          const res = await chat(ROLES.VERIFICATION, {
+            messages: [
+              {
+                role: "system",
+                content:
+                  "You solve multiple-choice questions. Work silently, then reply with ONLY the final line in the exact form 'ANSWER: X' where X is A, B, C or D. If the question is ambiguous or no option is correct, reply 'ANSWER: NONE'.",
+              },
+              {
+                role: "user",
+                content: `${q.question_text}\nA) ${q.option_a}\nB) ${q.option_b}\nC) ${q.option_c}\nD) ${q.option_d}`,
+              },
+            ],
+            temperature: 0,
+            max_tokens: 3000,
+          });
+          const text = res.choices?.[0]?.message?.content || "";
+          const m = text.match(/ANSWER:\s*(A|B|C|D|NONE)/i);
+          return m ? m[1].toUpperCase() : null;
+        } catch {
+          return null; // treated as "unknown" below
+        }
+      })
+    );
+
+    slice.forEach((q, idx) => {
+      const verdict = verdicts[idx];
+      if (verdict && verdict !== "NONE" && verdict !== q.correct_option) {
+        dropped++;
+        return;
+      }
+      if (verdict === "NONE") {
+        dropped++;
+        return;
+      }
+      kept.push(verdict ? { ...q, key_verified: true } : q);
+    });
+  }
+
+  if (dropped > 0) {
+    console.log(`🔍 Answer-key check: dropped ${dropped} of ${questions.length} (bad or unsolvable key).`);
+  }
+  return kept;
 }
 
 /* ================= COMPRESSED PROMPT (TOKEN SAVER) ================= */
@@ -85,30 +321,68 @@ async function fetchBatchFromGroq({
   count,
   difficulty,
   medium,
+  totalTarget,
+  section,
 }) {
   // 🔥 COMPRESSED PROMPT (Saves ~40% Tokens)
   // We removed lengthy examples but kept strict rules.
- const systemPrompt = `ACT: Chief Examiner (${examType}). GOAL: Create ${count} TOUGH, multi-step MCQs. TOPICS: ${topics.join(", ")}. LEVEL: ${difficulty}.
+  // Exam-specific structure and house style. Falls back to the generic brief
+  // when the exam code is not one we have a pattern for, rather than inventing
+  // a pattern for it.
+  const patternBrief = buildPatternBrief(examType, { questionCount: totalTarget });
+
+  // When generating a specific section of a real paper, that section's rules
+  // override the generic MCQ format below.
+  const sectionBrief = section ? describeSection(section) : null;
+  const type = section?.type || "mcq_single";
+  const optionless = type === "numerical" || type === "integer";
+
+  const systemPrompt = `ACT: Chief Examiner (${examType}). GOAL: Create ${count} TOUGH, multi-step questions. TOPICS: ${topics.join(", ")}. LEVEL: ${difficulty}.
+${patternBrief ? `\n${patternBrief}\n` : ""}${sectionBrief ? `\n${sectionBrief}\n` : ""}
 ⛔ STRICT RULES:
 1. Every math symbol, constant, matrix, or variable (x, y, n, a_n, M, R) MUST be enclosed in delimiters.
 2. INLINE expressions: Use \\( ... \\). (e.g. \\( f(x)=x^2 \\), \\( \\vec{a}=\\langle 2,3 \\rangle \\)).
-3. OPTIONS (A, B, C, D): Enclose whole content in \\( ... \\) if it has math/fractions. (e.g. A) \\( \\frac{1}{2} \\)). NO trailing raw $.
-4. DISPLAY/PIECEWISE: Use \\[ \\begin{cases} ... \\end{cases} \\] for functions/cases on separate lines.
-5. Spaces: Never clump text with math slashes (avoid "whereA(5,0)").
+3. NEVER nest delimiters. \\( 3 \\( t^2 \\) \\) is INVALID and breaks rendering. One \\( opens, the next \\) closes.
+4. OPTIONS (A, B, C, D): Enclose whole content in \\( ... \\) if it has math/fractions. (e.g. A) \\( \\frac{1}{2} \\)). NO trailing raw $.
+5. DISPLAY/PIECEWISE: Use \\[ \\begin{cases} ... \\end{cases} \\] for functions/cases on separate lines.
+6. Spaces: Never clump text with math slashes (avoid "whereA(5,0)").
 
-FORMAT (STRICT PLAIN TEXT, Separator: "---"):
+✅ ANSWER CORRECTNESS (most important rule):
+7. Solve each question fully before writing the options. The value you compute MUST appear verbatim as one of A-D.
+8. Distractors must be the results of plausible mistakes (sign error, missing factor, wrong formula) — never random numbers, and never an unevaluated expression.
+9. Exactly one option is correct. If you cannot verify it, discard the question and write a different one.
+
+🖼 DIAGRAM:
+10. A "Diagram:" line is REQUIRED for any question involving ray optics, circuits, free-body diagrams / inclined planes, geometry, coordinate geometry, graphs, waves, or vectors. These questions are unfair to a candidate without a figure.
+11. The Diagram line holds one complete inline SVG, all on ONE line:
+    Diagram: <svg viewBox="0 0 400 260" xmlns="http://www.w3.org/2000/svg">...</svg>
+    Use only <line>, <path>, <circle>, <rect>, <polygon>, <polyline>, <text>. Label every point, angle and axis with <text>. No <script>, no external images, no event handlers. Under 2000 characters.
+12. Omit the Diagram line ONLY for questions that are pure algebra, recall or text reasoning, where a figure would add nothing.
+
+${
+    optionless
+      ? `FORMAT (STRICT PLAIN TEXT, Separator: "---"). This section has NO OPTIONS — do not write A) B) C) D) at all:
 Question: <Text>
 Topic: <Topic>
+Diagram: <optional single-line SVG>
+Correct: <the numeric answer only, e.g. 12 or 3.75>
+Explanation: <Reasoning>
+---`
+      : `FORMAT (STRICT PLAIN TEXT, Separator: "---"):
+Question: <Text>
+Topic: <Topic>
+Diagram: <optional single-line SVG>
 A) <Opt>
 B) <Opt>
 C) <Opt>
 D) <Opt>
-Correct: <A/B/C/D>
+Correct: <${type === "mcq_multiple" ? "every correct letter, comma separated, e.g. A,C" : "A/B/C/D"}>
 Explanation: <Reasoning>
----`;
+---`
+  }`;
 
   try {
-    const completion = await groq.chat.completions.create({
+    const completion = await chat(ROLES.GENERATION, {
       messages: [
         { role: "system", content: systemPrompt },
         {
@@ -117,7 +391,6 @@ Explanation: <Reasoning>
           content: `Generate ${count} hard questions now.`,
         },
       ],
-      model: MODEL_NAME,
       temperature: 0.5,
       max_tokens: 4000, // Reduced slightly to force conciseness
       stop: ["<END_OF_BATCH>"],
@@ -125,6 +398,8 @@ Explanation: <Reasoning>
 
     const raw = completion.choices[0]?.message?.content || "";
     return parseBatchQuestions(raw, {
+      optionless,
+      questionType: type,
       examType,
       difficulty,
       defaultTopic: topics[0],
@@ -559,6 +834,9 @@ export function parseBatchQuestions(text, ctx) {
     optD:        /^D\s*[)\.\:\-]/i,
     correct:     /^(?:Correct|Ans|Answer|Correct\s+Answer)\s*[:\-\.\s]/i,
     explanation: /^(?:Explanation|Exp|Reason)\s*[:\-\.]/i,
+    // Checked after optD, which cannot match "Diagram:" - /^D\s*[)\.:\-]/
+    // requires a delimiter immediately after the D.
+    diagram:     /^(?:Diagram|Figure|Svg)\s*[:\-\.]/i,
   };
 
   for (const block of rawBlocks) {
@@ -566,7 +844,7 @@ export function parseBatchQuestions(text, ctx) {
     const lines = block.split(/\r?\n/);
     
     let currentKey = null;
-    const fields = { question: [], topic: [], optA: [], optB: [], optC: [], optD: [], correct: [], explanation: [] };
+    const fields = { question: [], topic: [], optA: [], optB: [], optC: [], optD: [], correct: [], explanation: [], diagram: [] };
 
     for (const line of lines) {
       const trimmed = line.trimEnd();
@@ -589,10 +867,25 @@ export function parseBatchQuestions(text, ctx) {
     const rawOptC = fields.optC.join(' ').trim();
     const rawOptD = fields.optD.join(' ').trim();
 
-    if (!rawQuestion || !rawOptA || !rawOptB) continue;
+    // Numerical / integer sections carry no options at all, so requiring
+    // them here would silently discard every question in those sections.
+    if (!rawQuestion) continue;
+    if (!ctx.optionless && (!rawOptA || !rawOptB)) continue;
 
-    const correctMatch = fields.correct.join(' ').match(/\b([A-D])\b/i);
-    const correct = correctMatch ? correctMatch[1].toUpperCase() : 'A';
+    const rawCorrect = fields.correct.join(' ').trim();
+    let correct;
+    if (ctx.optionless) {
+      // Keep the numeric answer verbatim, including decimals and sign.
+      correct = (rawCorrect.match(/-?\d+(?:\.\d+)?/) || ['0'])[0];
+    } else if (ctx.questionType === 'mcq_multiple') {
+      // One or more correct options, normalised to 'A,C'.
+      const letters = (rawCorrect.toUpperCase().match(/[A-D]/g) || ['A']);
+      correct = [...new Set(letters)].sort().join(',');
+    } else {
+      const m = rawCorrect.match(/\b([A-D])\b/i);
+      correct = m ? m[1].toUpperCase() : 'A';
+    }
+
     
     let topic = ctx.defaultTopic;
     const topicLine = fields.topic.join(' ').trim();
@@ -614,6 +907,10 @@ export function parseBatchQuestions(text, ctx) {
       option_d:      normalizeLatex(rawOptD),
       correct_option: correct,
       explanation:   normalizeLatex(rawExplanation) || 'See solution.',
+      // Model-authored markup: sanitized here, never trusted downstream.
+      // sanitizeSvg returns null for anything unsafe or non-drawing, so
+      // the field is simply absent rather than carrying junk.
+      diagram_svg:   sanitizeSvg(fields.diagram.join(NEWLINE).trim()) || null,
     });
   }
   return parsed;

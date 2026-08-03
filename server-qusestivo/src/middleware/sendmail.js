@@ -1,63 +1,25 @@
-import { google } from "googleapis";
-import dotenv from "dotenv";
-
-dotenv.config();
-
-const oauth2Client =
-new google.auth.OAuth2(
-process.env.GOOGLE_CLIENT_ID,
-process.env.GOOGLE_CLIENT_SECRET,
-process.env.GOOGLE_REDIRECT_URI
-);
-
-oauth2Client.setCredentials({
-refresh_token:
-process.env.GOOGLE_REFRESH_TOKEN
-});
-
-const gmail =
-google.gmail({
-version:"v1",
-auth:oauth2Client
-});
+/**
+ * Mail transport used by the auth flows (login OTP, verification, reset).
+ *
+ * This used to be a SECOND, independent mail implementation that called the
+ * Gmail API directly with an OAuth2 client, while config/gmail.js used
+ * nodemailer. Two transports meant two ways to fail: fixing one left the other
+ * broken, which is exactly what happened — login OTP kept dying with
+ * invalid_grant after the mail routes were already working.
+ *
+ * There is now one transport. config/gmail.js prefers an App Password over
+ * OAuth precisely so it cannot expire every 7 days; this module is a thin
+ * adapter that keeps the `transport.sendMail({to, subject, html})` shape the
+ * auth controllers already call.
+ */
+import { sendMail as send, verifyMailTransport } from "../../config/gmail.js";
 
 export const transport = {
-
-async sendMail({
-to,
-subject,
-html
-}){
-
-const message = [
-
-`From: Questivo <${process.env.MAIL_FROM}>`,
-`To: ${to}`,
-`Subject: ${subject}`,
-"MIME-Version: 1.0",
-"Content-Type: text/html; charset=UTF-8",
-"",
-html
-
-].join("\n");
-
-const encoded =
-Buffer
-.from(message)
-.toString("base64")
-.replace(/\+/g,"-")
-.replace(/\//g,"_")
-.replace(/=+$/,"");
-
-await gmail.users.messages.send({
-userId:"me",
-requestBody:{
-raw:encoded
-}
-});
-
-return true;
-
-}
-
+  async sendMail({ to, subject, html }) {
+    await send(to, subject, html);
+    return true;
+  },
 };
+
+export { verifyMailTransport };
+export default transport;

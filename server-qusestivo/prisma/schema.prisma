@@ -98,6 +98,16 @@ model TestQuestion {
   optionD        String
   correctOption  String
   explanation    String?
+  /// Sanitized inline SVG figure for the question (ray diagrams, FBDs,
+  /// geometry). Null for questions that need no figure. Written only by
+  /// src/lib/sanitizeSvg.js — never store raw model output here.
+  diagramSvg     String?
+  /// Raster figure sourced from Google Drive, stored as a data URI. Preferred
+  /// over diagramSvg when present - a teacher-drawn figure beats a generated
+  /// one. Only one of the two is ever set. See src/lib/driveDiagrams.js.
+  diagramImage   String?
+  /// "drive" when the figure came from Drive, else null (generated SVG).
+  diagramSource  String?
 
   topicId  String?
   topicRef ExamTopic? @relation(fields: [topicId], references: [id])

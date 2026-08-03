@@ -1,12 +1,11 @@
 import { Server } from 'socket.io';
-import Groq from 'groq-sdk';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { MsEdgeTTS, OUTPUT_FORMAT } from 'msedge-tts'; // 🛠️ HIGH-STABILITY STABLE INGESTION LAYER
 import prisma from '../prismaClient.js';
-
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+// Credentials, models and cross-provider failover live in the AI client.
+import { chat, transcribe, ROLES } from '../lib/aiClient.js';
 
 // Persistent Memory Maps to prevent runtime data resets across socket drops
 const globalSessionMemory = new Map();
@@ -193,9 +192,11 @@ CORE OPERATIONAL LOGIC & FEEDBACK ENGINE:
         
         fs.writeFileSync(tempWavFilename, wavBuffer);
 
-        const transcription = await groq.audio.transcriptions.create({
-          file: fs.createReadStream(tempWavFilename),
-          model: 'whisper-large-v3',
+        // fileFactory, not a stream: a stream consumed by a failed attempt
+        // cannot be replayed, so a retry on the next provider would upload an
+        // empty body and "succeed" with an empty transcript.
+        const transcription = await transcribe({
+          fileFactory: () => fs.createReadStream(tempWavFilename),
           temperature: 0.0
         });
 
@@ -262,11 +263,10 @@ async function runAgentInferenceLoop(socket) {
       });
     }
 
-    const completionChain = await groq.chat.completions.create({
+    const completionChain = await chat(ROLES.CONVERSATION, {
       messages: sessionContext.history,
-      model: 'llama-3.1-8b-instant',
       temperature: 0.4,
-      max_tokens: 250 
+      max_tokens: 250
     });
 
     let aiGeneratedQuestion = completionChain.choices[0]?.message?.content;

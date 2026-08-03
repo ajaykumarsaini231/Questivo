@@ -1,11 +1,6 @@
-import Groq from "groq-sdk";
-
-if (!process.env.GROQ_API_KEY) {
-  throw new Error("GROQ_API_KEY is missing in configuration environment");
-}
-
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-const MODEL_NAME = "openai/gpt-oss-120b";
+// Credentials and model come from the failover client so an expired or
+// rate-limited key rolls over to the next one automatically.
+import { chat, ROLES } from "../lib/aiClient.js";
 
 
 function calculateDeterministicScore(metrics) {
@@ -173,7 +168,7 @@ EXPECTED STRICT JSON STRUCTURAL LAYOUT:
 `;
 
   try {
-    const completion = await groq.chat.completions.create({
+    const completion = await chat(ROLES.ANALYSIS, {
       messages: [
         { role: "system", content: systemPrompt },
         {
@@ -181,7 +176,6 @@ EXPECTED STRICT JSON STRUCTURAL LAYOUT:
           content: `TARGET CONFIG MATRIX:\nRole: ${targetRole}\nSeniority: ${experienceLevel}\nJob Description Context: ${jobDescription || "Generic alignment rule matrix."}\n\n--- INGESTED PLAINTEXT --- \n${resumeText}`
         }
       ],
-      model: MODEL_NAME,
       temperature: 0.1,
       response_format: { type: "json_object" }
     });
