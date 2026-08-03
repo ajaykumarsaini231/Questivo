@@ -60,12 +60,12 @@ export const signup = async (req, res) => {
 
     await transport.sendMail({
       to: email,
-      subject: "Welcome to Quistivo - Verify Your Email",
+      subject: "Welcome to Questivo - Verify Your Email",
       html: `
     <div style="max-width:600px;margin:0 auto;font-family:Arial,Helvetica,sans-serif;background:#ffffff;border-radius:8px;border:1px solid #e5e7eb;padding:24px;">
       
       <div style="text-align:center;margin-bottom:20px;">
-        <h1 style="color:#4f46e5;margin:0;">Quistivo</h1>
+        <h1 style="color:#4f46e5;margin:0;">Questivo</h1>
         <p style="color:#6b7280;font-size:14px;margin-top:4px;">
           Smart Practice. Real Results.
         </p>
@@ -76,7 +76,7 @@ export const signup = async (req, res) => {
       </p>
 
       <p style="font-size:15px;color:#374151;line-height:1.6;">
-        Welcome to <strong>Quistivo</strong>! 🎯  
+        Welcome to <strong>Questivo</strong>! 🎯  
         You're just one step away from unlocking AI-powered mock tests
         tailored for competitive exams like JEE, GATE, SSC, and more.
       </p>
@@ -101,7 +101,7 @@ export const signup = async (req, res) => {
       <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0;">
 
       <p style="font-size:12px;color:#6b7280;text-align:center;">
-        © ${new Date().getFullYear()} Quistivo. All rights reserved.<br/>
+        © ${new Date().getFullYear()} Questivo. All rights reserved.<br/>
         This is an automated message. Please do not reply.
       </p>
     </div>
@@ -205,12 +205,12 @@ export const sendLoginOtp = async (req, res) => {
 
     await transport.sendMail({
       to: email,
-      subject: "Your Quistivo Login OTP",
+      subject: "Your Questivo Login OTP",
       html: `
     <div style="max-width:600px;margin:0 auto;font-family:Arial,Helvetica,sans-serif;background:#ffffff;border-radius:8px;border:1px solid #e5e7eb;padding:24px;">
       
       <div style="text-align:center;margin-bottom:20px;">
-        <h1 style="color:#4f46e5;margin:0;">Quistivo</h1>
+        <h1 style="color:#4f46e5;margin:0;">Questivo</h1>
         <p style="color:#6b7280;font-size:14px;margin-top:4px;">
           Smart Practice. Real Results.
         </p>
@@ -221,7 +221,7 @@ export const sendLoginOtp = async (req, res) => {
       </p>
 
       <p style="font-size:15px;color:#374151;line-height:1.6;">
-        We noticed a login attempt on your <strong>Quistivo</strong> account.
+        We noticed a login attempt on your <strong>Questivo</strong> account.
         Please use the OTP below to verify your login.
       </p>
 
@@ -241,7 +241,7 @@ export const sendLoginOtp = async (req, res) => {
       <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0;">
 
       <p style="font-size:12px;color:#6b7280;text-align:center;">
-        © ${new Date().getFullYear()} Quistivo. All rights reserved.<br/>
+        © ${new Date().getFullYear()} Questivo. All rights reserved.<br/>
         This is an automated message. Please do not reply.
       </p>
     </div>
@@ -319,12 +319,12 @@ export const sendResetOtp = async (req, res) => {
 
     await transport.sendMail({
       to: email,
-      subject: "Quistivo Password Reset Code – Secure Your Account",
+      subject: "Questivo Password Reset Code – Secure Your Account",
       html: `
     <div style="max-width:600px;margin:0 auto;font-family:Arial,Helvetica,sans-serif;background:#ffffff;border-radius:8px;border:1px solid #e5e7eb;padding:24px;">
       
       <div style="text-align:center;margin-bottom:20px;">
-        <h1 style="color:#4f46e5;margin:0;">Quistivo</h1>
+        <h1 style="color:#4f46e5;margin:0;">Questivo</h1>
         <p style="color:#6b7280;font-size:14px;margin-top:4px;">
           Smart Practice. Real Results.
         </p>
@@ -335,7 +335,7 @@ export const sendResetOtp = async (req, res) => {
       </p>
 
       <p style="font-size:15px;color:#374151;line-height:1.6;">
-        We received a request to reset your <strong>Quistivo</strong> account password.
+        We received a request to reset your <strong>Questivo</strong> account password.
         Please use the OTP below to proceed. This code is valid for <strong>5 minutes</strong>.
       </p>
 
@@ -355,7 +355,7 @@ export const sendResetOtp = async (req, res) => {
       <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0;">
 
       <p style="font-size:12px;color:#6b7280;text-align:center;">
-        © ${new Date().getFullYear()} Quistivo. All rights reserved.<br/>
+        © ${new Date().getFullYear()} Questivo. All rights reserved.<br/>
         This is an automated message. Please do not reply.
       </p>
     </div>
