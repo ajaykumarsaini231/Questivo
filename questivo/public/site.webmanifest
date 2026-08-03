@@ -1,0 +1,31 @@
+{
+  "name": "Questivo – AI Mock Test Platform",
+  "short_name": "Questivo",
+  "description": "AI-generated mock tests for JEE, NEET, GATE, SSC, RRB and UPSC, with instant scoring and step-by-step explanations.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#4f46e5",
+  "lang": "en-IN",
+  "categories": ["education", "productivity"],
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    }
+  ]
+}

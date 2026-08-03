@@ -1,83 +1,74 @@
 <!doctype html>
-<html lang="en">
+<html lang="en-IN">
   <head>
     <meta charset="UTF-8" />
-
-    <!-- Favicon -->
-    <link rel="icon" type="image/png" href="/logo.png" />
-
-    <!-- Viewport -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
-    <!-- Canonical -->
-    <link rel="canonical" href="https://questivo.vercel.app/" />
+    <!-- Icons -->
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+    <meta name="theme-color" content="#4f46e5" />
 
-    <!-- Primary Meta Tags -->
-    <title>Questivo – AI Powered Mock Test Platform</title>
     <meta name="google-site-verification" content="33UQOm1w1UNGwnNTPN1HuPdpuPmqWd-MBr9wl_BlCmg" />
-    <meta
-      name="description"
-      content="Questivo is an AI-powered mock test platform for competitive exams like GATE, JEE, SSC, CAT, and UPSC. Practice exam-level mock tests with deep reasoning."
-    />
-    <meta
-      name="keywords"
-      content="Questivo, Mock Tests, Competitive Exams, GATE, JEE, SSC, CAT, UPSC, AI Mock Tests"
-    />
-    <meta name="author" content="Questivo" />
-    <meta name="robots" content="index, follow" />
 
-    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/ort.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.19/dist/bundle.min.js"></script>
-
-    <!-- Open Graph -->
-    <meta property="og:type" content="website" />
-    <meta property="og:url" content="https://questivo.vercel.app/" />
-    <meta property="og:title" content="Questivo – AI Powered Mock Test Platform" />
-    <meta
-      property="og:description"
-      content="Prepare smarter with AI-generated, exam-level mock tests designed for real competitive exams."
-    />
-    <meta property="og:image" content="https://questivo.vercel.app/og-image.png" />
-
-    <!-- Twitter -->
-    <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:url" content="https://questivo.vercel.app/" />
-    <meta name="twitter:title" content="Questivo – AI Powered Mock Test Platform" />
-    <meta
-      name="twitter:description"
-      content="AI-powered mock tests with deep reasoning and real exam difficulty."
-    />
-    <meta name="twitter:image" content="https://questivo.vercel.app/og-image.png" />
-
-    <!-- Sitemap -->
     <link rel="sitemap" type="application/xml" href="/sitemap.xml" />
 
-    <!-- Structured Data: Website -->
-    <script type="application/ld+json">
-    {
-      "@context": "https://schema.org",
-      "@type": "WebSite",
-      "name": "Questivo",
-      "url": "https://questivo.vercel.app/"
-    }
-    </script>
-
-    <!-- Structured Data: Organization -->
-    <script type="application/ld+json">
-    {
-      "@context": "https://schema.org",
-      "@type": "Organization",
-      "name": "Questivo",
-      "url": "https://questivo.vercel.app/",
-      "logo": "https://questivo.vercel.app/logo.png"
-    }
-    </script>
+    <!--
+      Everything between these markers is replaced per route by
+      scripts/prerender.mjs. The defaults below are what `npm run dev` and any
+      non-prerendered URL fall back to, so they mirror the "/" entry in
+      src/lib/seo.ts. Edit that file, not this block.
+    -->
+    <!--seo-start-->
+    <!-- Hero image preload lives INSIDE this per-route block on purpose: it is
+         the LCP element on "/" only. In the shared head it was emitted on every
+         page, so /signin and every other route downloaded a 1200px image they
+         never render — wasted bandwidth plus a console warning
+         ("preloaded using link preload but not used"). -->
+    <link rel="preconnect" href="https://images.unsplash.com" crossorigin />
+    <link
+      rel="preload"
+      as="image"
+      href="https://images.unsplash.com/photo-1516321318423-f06f85e504b3?q=80&w=1200&auto=format&fit=crop"
+      fetchpriority="high"
+    />
+    <title>Questivo – AI Mock Test Generator for JEE, NEET, GATE, SSC & UPSC</title>
+    <meta
+      name="description"
+      content="Questivo generates unlimited, syllabus-accurate mock tests for JEE Main, NEET UG, GATE, SSC CGL, RRB NTPC and UPSC. Get instant scoring, step-by-step explanations and AI difficulty adjustment — free to start."
+    />
+    <link rel="canonical" href="https://questivo.vercel.app/" />
+    <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Questivo" />
+    <meta property="og:url" content="https://questivo.vercel.app/" />
+    <meta property="og:title" content="Questivo – AI Mock Test Generator for JEE, NEET, GATE, SSC & UPSC" />
+    <meta
+      property="og:description"
+      content="Unlimited AI-generated, syllabus-accurate mock tests with instant scoring and step-by-step explanations."
+    />
+    <meta property="og:image" content="https://questivo.vercel.app/og-image.jpg" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Questivo – AI Mock Test Generator for JEE, NEET, GATE, SSC & UPSC" />
+    <meta
+      name="twitter:description"
+      content="Unlimited AI-generated, syllabus-accurate mock tests with instant scoring and step-by-step explanations."
+    />
+    <meta name="twitter:image" content="https://questivo.vercel.app/og-image.jpg" />
+    <!--seo-end-->
   </head>
 
   <body>
-    <div id="root"></div>
-    <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-1831444805196519"
-     crossorigin="anonymous"></script>
+    <div id="root"><!--app-html--></div>
+    <!-- Kept outside #root so React hydration never sees it as a stray node. -->
+    <!--seo-noscript-->
     <script type="module" src="/src/main.tsx"></script>
+    <script
+      async
+      src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-1831444805196519"
+      crossorigin="anonymous"
+    ></script>
   </body>
 </html>

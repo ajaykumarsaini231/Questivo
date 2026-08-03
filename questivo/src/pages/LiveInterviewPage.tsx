@@ -7,6 +7,10 @@ import {
     Upload, FileText, Briefcase, X, Clock
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
+import { loadScript } from '../lib/loadScript';
+
+const ORT_CDN = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/ort.js";
+const VAD_CDN = "https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.19/dist/bundle.min.js";
 
 interface FileState {
     file: File;
@@ -131,8 +135,16 @@ export const LiveInterviewPage = () => {
     // VAD Engine Initialization Layer
     useEffect(() => {
         if (!authChecked) return;
+        let cancelled = false;
         const initializeVAD = async () => {
             try {
+                // Pulled in here rather than from index.html so the ~1MB of
+                // onnxruntime + VAD only costs the interview page. ort must be
+                // present before the VAD bundle runs.
+                await loadScript(ORT_CDN);
+                await loadScript(VAD_CDN);
+                if (cancelled) return;
+
                 const vadGlobal = (window as any).vad;
                 const ortGlobal = (window as any).ort;
                 if (!vadGlobal || !ortGlobal) return;
@@ -156,13 +168,24 @@ export const LiveInterviewPage = () => {
                         try { speechRecognitionRef.current?.stop(); } catch {}
                     },
                 });
+
+                // The await above means the page can unmount mid-construction;
+                // tear the instance down instead of leaking a live mic.
+                if (cancelled) {
+                    try { vadRef.current?.pause(); } catch {}
+                    vadRef.current = null;
+                }
             } catch (e) {
+                if (cancelled) return;
                 console.error("❌ VAD Core Execution Failed:", e);
                 setEngineState('ERROR');
             }
         };
         initializeVAD();
-        return () => { if (vadRef.current) vadRef.current.pause(); };
+        return () => {
+            cancelled = true;
+            if (vadRef.current) vadRef.current.pause();
+        };
     }, [authChecked]);
 
     useEffect(() => {

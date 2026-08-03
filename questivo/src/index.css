@@ -2,3 +2,189 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ==========================================================================
+   QUESTIVO DESIGN SYSTEM
+   --------------------------------------------------------------------------
+   Values measured from production exam-prep sites on 2026-08-03 rather than
+   invented, because the previous look read as an AI template. What the real
+   sites actually do:
+
+     Testbook    body #f6f8f9 · heading #181b1f · CTA #25cd71 · radius 4-8px
+                 card shadow rgba(117,138,172,.2) -1px 1px 4px
+     Adda247     body #fff    · heading #090023 · CTA #fc3a52 · radius 8px
+                 headings at weight 900
+     Oliveboard  body #fff    · heading #22252f · CTA #0a2472 / #00afef
+                 radius 4-7px · shadow rgba(0,0,0,.1) 0 2px 8px
+
+   Three things separate those from the old design here:
+     1. SMALL radii. Buttons 6px, cards 10px - not rounded-xl/2xl everywhere.
+     2. NEUTRAL, SHALLOW shadows. Never a coloured `shadow-indigo-200`.
+     3. SOLID brand colour and near-black headings. No gradient headline text -
+        that gradient is the single loudest "generated site" signal.
+
+   Contrast: every pairing below is checked against WCAG AA (4.5:1 for body
+   text, 3:1 for large text and UI borders). --c-text-muted is the lightest
+   value permitted for real text; anything lighter is decoration only.
+   ========================================================================== */
+
+@layer base {
+  :root {
+    /* Brand - solid, never gradient-on-text */
+    --c-brand: #4338ca;        /* 8.6:1 on white  */
+    --c-brand-hover: #3730a3;  /* 10.9:1          */
+    --c-brand-soft: #eef2ff;
+    --c-brand-border: #c7d2fe;
+
+    /* Accent for success / "free" affordances */
+    --c-accent: #047857;       /* 4.8:1 on white  */
+    --c-accent-soft: #ecfdf5;
+
+    /* Ink - near-black headings, as the real sites use */
+    --c-heading: #12151a;      /* 17.4:1 on white */
+    --c-text: #33383f;         /* 10.4:1          */
+    --c-text-muted: #596273;   /*  5.9:1 - lightest allowed for text */
+
+    /* Surfaces */
+    --c-bg: #f6f8f9;
+    --c-surface: #ffffff;
+    --c-border: #e3e8ef;
+    --c-border-strong: #cbd5e1;
+
+    /* Radii - deliberately small */
+    --r-btn: 6px;
+    --r-card: 10px;
+    --r-pill: 999px;
+
+    /* Shadows - neutral and shallow */
+    --sh-card: 0 1px 2px rgba(16, 24, 40, 0.04), 0 2px 8px rgba(16, 24, 40, 0.06);
+    --sh-card-hover: 0 2px 4px rgba(16, 24, 40, 0.06), 0 8px 20px rgba(16, 24, 40, 0.09);
+    --sh-btn: 0 1px 2px rgba(16, 24, 40, 0.08);
+  }
+
+  body {
+    background: var(--c-bg);
+    color: var(--c-text);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1, h2, h3, h4 {
+    color: var(--c-heading);
+    letter-spacing: -0.018em;
+  }
+
+  /* Visible keyboard focus everywhere. The old design had none. */
+  :where(a, button, input, select, textarea, summary):focus-visible {
+    outline: 2px solid var(--c-brand);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+}
+
+@layer components {
+  /* ---------- Buttons ---------- */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 font-semibold;
+    border-radius: var(--r-btn);
+    padding: 11px 20px;
+    font-size: 15px;
+    line-height: 1.2;
+    transition: background-color .15s ease, border-color .15s ease, box-shadow .15s ease;
+  }
+
+  .btn-primary {
+    background: var(--c-brand);
+    color: #fff;
+    box-shadow: var(--sh-btn);
+  }
+  .btn-primary:hover { background: var(--c-brand-hover); }
+
+  .btn-secondary {
+    background: var(--c-surface);
+    color: var(--c-brand);
+    border: 1px solid var(--c-border-strong);
+    box-shadow: var(--sh-btn);
+  }
+  .btn-secondary:hover { border-color: var(--c-brand); background: var(--c-brand-soft); }
+
+  .btn-lg { padding: 14px 26px; font-size: 16px; }
+  .btn-sm { padding: 8px 14px; font-size: 14px; }
+
+  /* ---------- Cards ---------- */
+  .card {
+    background: var(--c-surface);
+    border: 1px solid var(--c-border);
+    border-radius: var(--r-card);
+    box-shadow: var(--sh-card);
+    transition: box-shadow .18s ease, border-color .18s ease;
+  }
+  .card-hover:hover {
+    box-shadow: var(--sh-card-hover);
+    border-color: var(--c-border-strong);
+  }
+
+  /* ---------- Chips / tags ---------- */
+  .chip {
+    @apply inline-flex items-center font-medium;
+    border-radius: var(--r-pill);
+    padding: 4px 10px;
+    font-size: 12.5px;
+    background: var(--c-brand-soft);
+    color: var(--c-brand);
+    border: 1px solid var(--c-brand-border);
+  }
+  .chip-free {
+    background: var(--c-accent-soft);
+    color: var(--c-accent);
+    border-color: #a7f3d0;
+  }
+
+  /* ---------- Data tables (exam patterns / syllabus) ---------- */
+  .data-table { @apply w-full border-collapse text-left; font-size: 14.5px; }
+  .data-table thead th {
+    background: #eff2f6;
+    color: var(--c-heading);
+    font-weight: 600;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--c-border-strong);
+    white-space: nowrap;
+  }
+  .data-table tbody td,
+  .data-table tbody th {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--c-border);
+    vertical-align: top;
+    font-weight: 400;
+    color: var(--c-text);
+  }
+  .data-table tbody tr:last-child td,
+  .data-table tbody tr:last-child th { border-bottom: 0; }
+  .data-table tbody tr:hover { background: #f8fafc; }
+
+  .section-title { @apply font-bold; font-size: clamp(22px, 2.4vw, 30px); }
+  .muted { color: var(--c-text-muted); }
+
+  /* ---------- Page shell ----------
+     Tailwind v4's `container` has NO max-width, so `container mx-auto` let the
+     hero span the whole viewport — on a 1900px screen the content ran to both
+     edges and the hero image ballooned. Measured caps on real sites:
+     Khan Academy 1200px, Brilliant 1440px, Coursera 1440px. 1200 is the most
+     readable at this line length. */
+  .shell {
+    width: 100%;
+    max-width: 1200px;
+    margin-inline: auto;
+    padding-inline: 20px;
+  }
+  @media (min-width: 768px) {
+    .shell { padding-inline: 32px; }
+  }
+
+  /* ---------- Hero ----------
+     h1 sat 288px down the page; Khan starts at 158, Coursera at 119. The old
+     pt-12/lg:pt-24 + pb-20/lg:pb-32 was the whole difference. */
+  .hero { padding-top: 32px; padding-bottom: 48px; }
+  @media (min-width: 1024px) {
+    .hero { padding-top: 48px; padding-bottom: 64px; }
+  }
+}

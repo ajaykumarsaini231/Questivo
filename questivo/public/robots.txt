@@ -1,0 +1,85 @@
+# https://questivo.vercel.app/robots.txt
+
+# ---------------------------------------------------------------------------
+# Default: everything public is crawlable.
+# ---------------------------------------------------------------------------
+User-agent: *
+Allow: /
+
+# Admin console — never fetch.
+Disallow: /admin
+Disallow: /admin/
+
+# Per-user session URLs: unbounded in number, unique to one person, and they
+# leak session ids into search results. Blocked to protect crawl budget.
+Disallow: /tests/
+Disallow: /interviews/
+
+# NOTE: /signin, /signup and /profile are deliberately NOT disallowed here.
+# They serve <meta name="robots" content="noindex">, and a crawler that is
+# blocked from fetching a page never sees that tag — Google can still list a
+# disallowed URL from inbound links alone. Allowing the fetch is what actually
+# keeps them out of the index.
+#
+# Query strings are likewise not blocked: rel=canonical already collapses
+# duplicates, and a blanket ?-block would break the WebSite SearchAction target
+# and any UTM-tagged campaign landing page.
+
+# ---------------------------------------------------------------------------
+# AI / answer-engine crawlers.
+#
+# These are listed explicitly so the decision is visible rather than implied by
+# the wildcard above. Questivo *wants* to be cited in AI answers, so they are
+# allowed. To opt a company out, change its Allow to Disallow.
+# ---------------------------------------------------------------------------
+
+# OpenAI — model training, ChatGPT search index, and live user fetches
+User-agent: GPTBot
+User-agent: OAI-SearchBot
+User-agent: ChatGPT-User
+Allow: /
+
+# Anthropic
+User-agent: ClaudeBot
+User-agent: Claude-User
+User-agent: Claude-SearchBot
+User-agent: anthropic-ai
+Allow: /
+
+# Perplexity
+User-agent: PerplexityBot
+User-agent: Perplexity-User
+Allow: /
+
+# Google Gemini / AI Overviews (separate from Googlebot: blocking this does not
+# affect normal Search ranking)
+User-agent: Google-Extended
+Allow: /
+
+# Apple Intelligence
+User-agent: Applebot
+User-agent: Applebot-Extended
+Allow: /
+
+# Meta AI
+User-agent: meta-externalagent
+User-agent: FacebookBot
+Allow: /
+
+# Microsoft Copilot
+User-agent: Bingbot
+Allow: /
+
+# Common Crawl — the training corpus behind many open models
+User-agent: CCBot
+Allow: /
+
+# Others
+User-agent: Amazonbot
+User-agent: DuckAssistBot
+User-agent: YouBot
+User-agent: cohere-ai
+User-agent: Diffbot
+Allow: /
+
+Sitemap: https://questivo.vercel.app/sitemap.xml

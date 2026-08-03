@@ -105,7 +105,7 @@ export const AdminLayout: React.FC = () => {
         <div className="p-8 flex justify-between items-center">
           <div>
             <h1 className="text-2xl font-extrabold tracking-tight text-slate-800">
-              Quistivo<span className="text-indigo-600">.</span>
+              Questivo<span className="text-indigo-600">.</span>
             </h1>
             <p className="text-xs text-slate-400 font-medium tracking-wide mt-1 uppercase">Admin Workspace</p>
           </div>

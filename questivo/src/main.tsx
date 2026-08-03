@@ -16,9 +16,9 @@ if (!GOOGLE_CLIENT_ID) {
   console.error("Google Client ID is missing! Check your .env file.");
 }
 
-ReactDOM.createRoot(
-  document.getElementById('root')!
-).render(
+const container = document.getElementById('root')!;
+
+const tree = (
   <React.StrictMode>
     {
       GOOGLE_CLIENT_ID ? (
@@ -35,3 +35,13 @@ ReactDOM.createRoot(
     }
   </React.StrictMode>
 );
+
+// Prerendered routes (see scripts/prerender.mjs) ship real markup inside #root,
+// so adopt it instead of throwing it away — that keeps the first paint the
+// browser already has and avoids a blank flash. Routes served through the SPA
+// fallback have an empty container and mount normally.
+if (container.firstElementChild) {
+  ReactDOM.hydrateRoot(container, tree);
+} else {
+  ReactDOM.createRoot(container).render(tree);
+}
