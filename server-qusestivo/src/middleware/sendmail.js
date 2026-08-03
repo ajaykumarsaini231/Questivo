@@ -1,16 +1,14 @@
 /**
  * Mail transport used by the auth flows (login OTP, verification, reset).
  *
- * This used to be a SECOND, independent mail implementation that called the
- * Gmail API directly with an OAuth2 client, while config/gmail.js used
- * nodemailer. Two transports meant two ways to fail: fixing one left the other
- * broken, which is exactly what happened — login OTP kept dying with
- * invalid_grant after the mail routes were already working.
+ * This was once a SECOND, independent mail implementation sitting alongside
+ * config/gmail.js. Two transports meant two ways to fail, and fixing one left
+ * the other broken — login OTP kept dying while the mail routes looked fine.
  *
- * There is now one transport. config/gmail.js prefers an App Password over
- * OAuth precisely so it cannot expire every 7 days; this module is a thin
- * adapter that keeps the `transport.sendMail({to, subject, html})` shape the
- * auth controllers already call.
+ * There is now one transport: config/gmail.js, sending through the Gmail REST
+ * API over HTTPS (the same approach as the METNMAT dashboard). This module is
+ * a thin adapter preserving the `transport.sendMail({to, subject, html})`
+ * shape the auth controllers already call.
  */
 import { sendMail as send, verifyMailTransport } from "../../config/gmail.js";
 

@@ -1,87 +1,158 @@
-import nodemailer from "nodemailer";
 import { google } from "googleapis";
 import dotenv from "dotenv";
 
 dotenv.config();
 
 /**
- * Outbound mail.
+ * Outbound mail — Gmail REST API over HTTPS.
  *
- * Two transports, tried in order:
+ * Modelled on the METNMAT dashboard's lib/gmail/send-otp.ts, which sends via
+ * `gmail.users.messages.send` rather than SMTP.
  *
- *   1. APP PASSWORD (preferred). Plain SMTP with a Google App Password. No
- *      OAuth client, no consent screen, no verification, and critically no
- *      7-day refresh-token expiry. This is the right tool for "an app sends
- *      mail as its own Gmail account".
+ * WHY NOT SMTP (this is the whole reason the file looks like this):
+ * Render's free web services block outbound traffic to SMTP ports 25, 465 and
+ * 587 (Render changelog, 16 Sept 2025). A perfectly valid Gmail App Password
+ * still failed in production with ETIMEDOUT on CONN, because the socket can
+ * never open. The Gmail API talks HTTPS on 443, which is not blocked — so it
+ * works on Render free where nodemailer/SMTP cannot. The SMTP path has been
+ * removed entirely rather than left as a fallback that silently reintroduces
+ * the same outage.
  *
- *   2. OAUTH2 (fallback). Kept for deployments that only have the refresh
- *      token configured.
- *
- * Why the order changed: the OAuth path kept dying with invalid_grant because
- * the consent screen sits in "Testing", where Google expires refresh tokens
- * after 7 days. An App Password sidesteps that entirely.
- *
- * App Passwords require 2-Step Verification on the account, and are created at
- * https://myaccount.google.com/apppasswords — 16 characters, spaces optional.
+ * Error handling follows the same principle as METNMAT's formatGmailSendError:
+ * a failure should name the thing the operator has to go and fix, not just say
+ * "invalid_grant".
  */
 
-const APP_PASSWORD = (process.env.NODE_CODE_SENDING_EMAIL_ADDRESS_PASSWORD || "")
-  // Google displays them in groups of four; the API wants them unspaced.
-  .replace(/\s+/g, "");
-const SMTP_USER =
-  process.env.NODE_CODE_SENDING_EMAIL_ADDRESS || process.env.MAIL_FROM;
-const FROM = process.env.MAIL_FROM || SMTP_USER;
+const CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
+const REFRESH_TOKEN = process.env.GOOGLE_REFRESH_TOKEN;
+const SENDER = process.env.MAIL_FROM || process.env.NODE_CODE_SENDING_EMAIL_ADDRESS;
+const FROM_HEADER = SENDER ? `Questivo <${SENDER}>` : undefined;
+const SEND_TIMEOUT_MS = Number(process.env.MAIL_SEND_TIMEOUT_MS || 10_000);
 
-const useAppPassword = Boolean(APP_PASSWORD && SMTP_USER);
+export function isMailConfigured() {
+  return Boolean(CLIENT_ID && CLIENT_SECRET && REFRESH_TOKEN && SENDER);
+}
+
+/**
+ * Catch the classic mix-up before it reaches Google: pasting the one-time
+ * authorisation code (starts "4/0A") into GOOGLE_REFRESH_TOKEN instead of the
+ * refresh token (starts "1//"). Google answers both with a bare invalid_grant,
+ * which sends people hunting the wrong problem.
+ */
+function refreshTokenFormatHint(token) {
+  if (!token) return "GOOGLE_REFRESH_TOKEN is empty.";
+  if (token.startsWith("4/")) {
+    return (
+      "GOOGLE_REFRESH_TOKEN looks like a one-time OAuth authorisation code " +
+      '(starts with "4/"), not a refresh token (starts with "1//"). ' +
+      "Run: node scripts/googleRefreshToken.mjs"
+    );
+  }
+  return undefined;
+}
 
 let oauth2Client = null;
-if (!useAppPassword) {
-  oauth2Client = new google.auth.OAuth2(
-    process.env.GOOGLE_CLIENT_ID,
-    process.env.GOOGLE_CLIENT_SECRET,
-    process.env.GOOGLE_REDIRECT_URI
-  );
-  oauth2Client.setCredentials({ refresh_token: process.env.GOOGLE_REFRESH_TOKEN });
-}
-
-console.log(
-  `[Mail] transport: ${useAppPassword ? "SMTP app password" : "OAuth2 refresh token"}` +
-    `${useAppPassword ? "" : " — set NODE_CODE_SENDING_EMAIL_ADDRESS_PASSWORD to avoid the 7-day token expiry"}`
-);
-
-async function buildTransport() {
-  if (useAppPassword) {
-    return nodemailer.createTransport({
-      service: "gmail",
-      auth: { user: SMTP_USER, pass: APP_PASSWORD },
-    });
+function getOAuthClient() {
+  if (!oauth2Client) {
+    oauth2Client = new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET, process.env.GOOGLE_REDIRECT_URI);
+    oauth2Client.setCredentials({ refresh_token: REFRESH_TOKEN });
   }
-
-  const accessToken = await oauth2Client.getAccessToken();
-  return nodemailer.createTransport({
-    service: "gmail",
-    auth: {
-      type: "OAuth2",
-      user: FROM,
-      clientId: process.env.GOOGLE_CLIENT_ID,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-      refreshToken: process.env.GOOGLE_REFRESH_TOKEN,
-      accessToken: accessToken?.token,
-    },
-  });
+  return oauth2Client;
 }
 
-/** Display name on outgoing mail, e.g. "Questivo <noreply@…>". */
-const FROM_HEADER = FROM ? `Questivo <${FROM}>` : undefined;
+/** Turn a Gmail failure into something actionable. */
+function formatGmailError(err) {
+  const code = err?.response?.data?.error;
+  const desc = err?.response?.data?.error_description;
+
+  if (code === "invalid_grant") {
+    return (
+      "Gmail refresh token is invalid or expired. Most often the OAuth consent " +
+      'screen is still in "Testing", where Google expires refresh tokens after ' +
+      "7 days — publish the app, or re-mint the token with " +
+      "`node scripts/googleRefreshToken.mjs` and update GOOGLE_REFRESH_TOKEN " +
+      "in the deployment environment (Render), not just locally."
+    );
+  }
+  if (code === "unauthorized_client" || code === "invalid_client") {
+    return (
+      "Gmail OAuth client mismatch. GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET do " +
+      "not match the client the refresh token was minted for. Note the Render " +
+      "environment may hold a different client than your local .env."
+    );
+  }
+  if (err?.code === 403 || err?.status === 403) {
+    return (
+      "Gmail API refused the request (403). Check the Gmail API is enabled for " +
+      "this project and the token carries the gmail.send scope."
+    );
+  }
+  return `Could not send email (${desc || code || err?.message || "unknown error"}).`;
+}
+
+/** RFC 5322 message, base64url encoded the way the Gmail API expects. */
+function encodeMessage({ to, subject, html }) {
+  const lines = [
+    `From: ${FROM_HEADER || SENDER}`,
+    `To: ${to}`,
+    `Subject: ${subject}`,
+    "MIME-Version: 1.0",
+    "Content-Type: text/html; charset=UTF-8",
+    "",
+    html,
+  ];
+  return Buffer.from(lines.join("\n"))
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+}
 
 export async function sendMail(to, subject, html) {
-  const transporter = await buildTransport();
-  return transporter.sendMail({ from: FROM_HEADER, to, subject, html });
+  if (!isMailConfigured()) {
+    const missing = [
+      !CLIENT_ID && "GOOGLE_CLIENT_ID",
+      !CLIENT_SECRET && "GOOGLE_CLIENT_SECRET",
+      !REFRESH_TOKEN && "GOOGLE_REFRESH_TOKEN",
+      !SENDER && "MAIL_FROM",
+    ].filter(Boolean);
+    throw new Error(`Gmail is not configured. Missing: ${missing.join(", ")}`);
+  }
+
+  const hint = refreshTokenFormatHint(REFRESH_TOKEN);
+  if (hint) throw new Error(hint);
+
+  const recipient = String(to || "").trim().toLowerCase();
+  if (!recipient.includes("@")) throw new Error("Invalid recipient email address.");
+
+  try {
+    const gmail = google.gmail({ version: "v1", auth: getOAuthClient() });
+    return await gmail.users.messages.send(
+      { userId: "me", requestBody: { raw: encodeMessage({ to: recipient, subject, html }) } },
+      { timeout: SEND_TIMEOUT_MS }
+    );
+  } catch (err) {
+    throw new Error(formatGmailError(err));
+  }
 }
 
-/** Verify the configured transport can actually authenticate. */
+/** Confirm the credentials can mint an access token, without sending mail. */
 export async function verifyMailTransport() {
-  const transporter = await buildTransport();
-  await transporter.verify();
-  return useAppPassword ? "app-password" : "oauth2";
+  if (!isMailConfigured()) throw new Error("Gmail is not configured.");
+  const hint = refreshTokenFormatHint(REFRESH_TOKEN);
+  if (hint) throw new Error(hint);
+  try {
+    const { token } = await getOAuthClient().getAccessToken();
+    if (!token) throw new Error("no access token returned");
+    return "gmail-api";
+  } catch (err) {
+    throw new Error(formatGmailError(err));
+  }
 }
+
+export const mailTransportName = () => "gmail-api";
+
+console.log(
+  `[Mail] transport: Gmail API over HTTPS${isMailConfigured() ? "" : " — NOT CONFIGURED, OTP emails will fail"}`
+);
