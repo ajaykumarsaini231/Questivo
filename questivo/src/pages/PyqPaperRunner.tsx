@@ -335,20 +335,37 @@ export default function PyqPaperRunner() {
                 cut-out is actually attached, printing that line above the image
                 tells the candidate nothing and looks like the question failed
                 to load. The image IS the question; show it alone. */}
-            {!isPlaceholderStem(current) && (
+            {/* The stem as the paper printed it, when we have it. It is the
+                authoritative rendering — the extracted text is a transcription
+                of it — so it leads, and the text follows only when there is no
+                image or the text adds something the crop does not. */}
+            {current?.questionImage && (
+              <img
+                src={current.questionImage}
+                alt={`Question ${current.paperQuestionNumber} as printed`}
+                loading="lazy"
+                className="mb-4 max-w-full rounded border border-slate-200"
+              />
+            )}
+
+            {!current?.questionImage && !isPlaceholderStem(current) && (
               <div className="prose prose-slate max-w-none text-[15px] leading-relaxed text-slate-800">
                 <SafeMathRenderer text={current?.questionText ?? ""} />
               </div>
             )}
 
-            {current?.diagramImage && (
+            {/* The older whole-question figure, kept for rows that predate the
+                per-part crops. Suppressed when questionImage exists, because
+                the linker points both at the same file and the stem would
+                render twice. */}
+            {current?.diagramImage && !current?.questionImage && (
               <img
                 src={current.diagramImage}
                 alt=""
                 className="mt-4 max-h-96 rounded border border-slate-200"
               />
             )}
-            {!current?.diagramImage && current?.diagramSvg && (
+            {!current?.diagramImage && !current?.questionImage && current?.diagramSvg && (
               <div
                 className="mt-4 overflow-x-auto"
                 // Sanitized server-side by lib/sanitizeSvg.js before storage.
@@ -360,6 +377,7 @@ export default function PyqPaperRunner() {
               <div className="mt-6 space-y-2.5">
                 {(["A", "B", "C", "D"] as const).map((letter) => {
                   const text = (current as any)[`option${letter}`] as string | null;
+                  const image = (current as any)[`option${letter}Image`] as string | null;
                   const selected = draft === letter;
                   return (
                     <label
@@ -379,7 +397,22 @@ export default function PyqPaperRunner() {
                       />
                       <span className="font-semibold text-slate-500">({letter})</span>
                       <span className="flex-1 text-[15px] text-slate-800">
-                        {text ? <SafeMathRenderer text={text} /> : <em className="text-slate-400">see figure</em>}
+                        {/* The choice as printed, cropped to itself — which is
+                            why the options are separate images. "see figure"
+                            was the old fallback and is only reached when
+                            neither a crop nor readable text exists. */}
+                        {image ? (
+                          <img
+                            src={image}
+                            alt={`Option ${letter}`}
+                            loading="lazy"
+                            className="max-w-full"
+                          />
+                        ) : text ? (
+                          <SafeMathRenderer text={text} />
+                        ) : (
+                          <em className="text-slate-400">not readable — see the question image</em>
+                        )}
                       </span>
                     </label>
                   );
@@ -943,13 +976,26 @@ function ResultView({
                   <strong className="text-emerald-700">{r.correctAnswer ?? "awarded to all"}</strong>
                 </p>
 
-                {r.solution && r.solutionQuality === "prose" && (
+                {/* The booklet's own worked solution, as printed. Preferred
+                    over the extracted text: a derivation is stacked fractions
+                    and integral signs, which no text layer linearises — 793 of
+                    them extract as loose operators. */}
+                {(r.solutionImage || (r.solution && r.solutionQuality === "prose")) && (
                   <details className="mt-2">
                     <summary className="cursor-pointer text-sm font-medium text-indigo-600">
                       Solution
                     </summary>
                     <div className="mt-2 text-sm text-slate-700">
-                      <SafeMathRenderer text={r.solution} />
+                      {r.solutionImage ? (
+                        <img
+                          src={r.solutionImage}
+                          alt={`Worked solution for question ${r.paperQuestionNumber}`}
+                          loading="lazy"
+                          className="max-w-full rounded border border-slate-200"
+                        />
+                      ) : (
+                        <SafeMathRenderer text={r.solution!} />
+                      )}
                     </div>
                   </details>
                 )}

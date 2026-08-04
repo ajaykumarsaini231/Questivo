@@ -81,6 +81,18 @@ export interface PyqPaperQuestion {
   figureHint: string | null;
   diagramSvg: string | null;
   diagramImage: string | null;
+  /**
+   * The question as it was printed, cut out of the source page in parts.
+   *
+   * Separate images rather than one picture of the whole question, so the
+   * options can sit beside their radio buttons and a numerical question shows
+   * none. Where the text layer could not be recovered these ARE the question.
+   */
+  questionImage: string | null;
+  optionAImage: string | null;
+  optionBImage: string | null;
+  optionCImage: string | null;
+  optionDImage: string | null;
   sourceUrl: string | null;
 }
 
@@ -98,6 +110,8 @@ export interface PyqScoreRow {
   marks: number;
   solution: string | null;
   solutionQuality: string | null;
+  /** The worked solution as the booklet printed it. Released with the answer. */
+  solutionImage: string | null;
 }
 
 export interface PyqScore {

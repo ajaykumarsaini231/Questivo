@@ -49,15 +49,22 @@ Link cut-out figures to their questions.
 
 const BASE = args.base && args.base !== true ? String(args.base).replace(/\/$/, "") : "/pyq-figures/2023";
 
-// Git Bash rewrites a leading "/" argument into a Windows path before Node sees
-// it, so `--base /pyq-figures/2022` arrives as
+// Either a site-relative path or an absolute URL.
+//
+// A relative "/pyq-figures/2022" serves the images from the frontend's own
+// public/ folder; an absolute "https://cdn.jsdelivr.net/gh/..." serves them
+// from a CDN in front of the repository, which keeps 133 MB out of every Vercel
+// build. Both work in the renderer, which only does <img src={...}>.
+//
+// Anything else is the Git Bash bug: it rewrites a leading "/" argument into a
+// Windows path before Node sees it, so `--base /pyq-figures/2022` arrives as
 // "C:/Program Files/Git/pyq-figures/2022". That silently wrote 1081 rows
-// pointing at a path no browser can resolve, and the run reported success. The
-// base is a URL path and can only start with "/", so anything else is that bug.
-if (!BASE.startsWith("/")) {
+// pointing at a path no browser can resolve, and the run reported success.
+if (!/^(\/|https?:\/\/)/.test(BASE)) {
   console.error(
-    `✖ --base must be a URL path beginning with "/", got "${BASE}".\n` +
-      `  On Git Bash the shell rewrites such arguments — prefix the command with\n` +
+    `✖ --base must be a URL path beginning with "/" or an absolute http(s) URL,\n` +
+      `  got "${BASE}".\n` +
+      `  On Git Bash the shell rewrites a leading "/" — prefix the command with\n` +
       `  MSYS_NO_PATHCONV=1, or run it from PowerShell.`
   );
   process.exit(1);

@@ -91,8 +91,12 @@ const CHECKS = [
   },
   {
     id: "no-key",
-    what: "No answer key, and not marked bonus",
-    test: (r) => !r.correctAnswer && r.status !== "bonus",
+    what: "No answer key, and no status explaining why",
+    // Two statuses legitimately have none: "bonus" (the board voided the
+    // question and awarded the marks to everyone) and "needs_review" (the
+    // printed key could not be matched to this question, so it was dropped
+    // rather than guessed). Both are deliberate; only a silent absence is a bug.
+    test: (r) => !r.correctAnswer && r.status !== "bonus" && r.status !== "needs_review",
   },
   {
     id: "figure-missing",
