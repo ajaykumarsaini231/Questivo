@@ -278,6 +278,29 @@ function trimToInk(pix) {
   let right = w - 1;
   while (right > left && emptyCol(right)) right--;
 
+  // A rule immediately beside the content belongs to the content.
+  //
+  // "Rule" is decided by how far the ink stretches, and a graph's x-axis
+  // stretches as far as a cell border does — so a "which of these plots" option
+  // had its axes, ticks and axis labels classified as furniture and cut off,
+  // leaving a curve floating in space. Reaching back over the rules that
+  // ADJOIN the content recovers those, while a border on the far side of an
+  // empty cell stays outside and is still dropped.
+  const REACH = 4;
+  const grow = (i, step, limit, isRule) => {
+    let out = i;
+    for (let k = 0; k < REACH; k++) {
+      const next = out + step;
+      if (next < 0 || next > limit || !isRule[next]) break;
+      out = next;
+    }
+    return out;
+  };
+  top = grow(top, -1, h - 1, ruleRow);
+  bottom = grow(bottom, 1, h - 1, ruleRow);
+  left = grow(left, -1, w - 1, ruleCol);
+  right = grow(right, 1, w - 1, ruleCol);
+
   top = Math.max(0, top - TRIM_PAD);
   left = Math.max(0, left - TRIM_PAD);
   bottom = Math.min(h - 1, bottom + TRIM_PAD);
@@ -290,13 +313,39 @@ function trimToInk(pix) {
 
   const out = new mupdf.Pixmap(mupdf.ColorSpace.DeviceGray, [0, 0, tw, th], false);
   out.clear(255);
+  // BOTH views are taken after the allocation above, and neither before.
+  //
+  // getPixels() hands back a Uint8Array over the wasm heap, not a copy. Any
+  // mupdf allocation can grow that heap, and growing it replaces the underlying
+  // ArrayBuffer and detaches every view onto the old one. `px` was read before
+  // this Pixmap was created, so on whichever crop happened to push the heap
+  // over its limit, `px.subarray()` threw on a detached buffer — and the throw
+  // was swallowed by the catch around the write, so that question simply had no
+  // image and was not even counted as missing.
+  const src = pix.getPixels();
   const dst = out.getPixels();
   const dstStride = out.getStride();
   for (let y = 0; y < th; y++) {
     const from = (top + y) * stride + left;
-    dst.set(px.subarray(from, from + tw), y * dstStride);
+    dst.set(src.subarray(from, from + tw), y * dstStride);
   }
   return out;
+}
+
+/**
+ * Remove a crop that was written and then decided against.
+ *
+ * The option images have to be cut before it is known whether all four
+ * survived; when they did not, the ones that did are no longer referenced and
+ * would otherwise sit in the folder, be committed, and pass the existence check
+ * in linkPyqFigures.mjs as readily as a live crop.
+ */
+function discard(dir, name) {
+  try {
+    fs.unlinkSync(path.join(dir, name));
+  } catch {
+    /* already gone */
+  }
 }
 
 /** Trim, encode, and clean up whichever pixmap the trim produced. */
@@ -624,13 +673,37 @@ export function extractFigures({ pdfPath, outDir, wanted, mode }) {
     // paper printed for that question, minus whatever was successfully split
     // out of it. Losing the split is survivable; losing the options is not.
     const wantedOptions = w.wantOptions !== false;
-    // A question that runs onto the next page is never "complete" here, however
-    // many markers were found on this one: the rest of it is on a page these
+
+    // THE OPTIONS ARE CUT FIRST, AND THE STEM IS DECIDED FROM WHAT SURVIVED.
+    //
+    // Whether the stem may stop above the options depends on the options
+    // existing somewhere else, and that is not known until they are written:
+    // a rectangle can be located and still yield no file, because trimming it
+    // leaves nothing but blank paper and cell borders. Deciding from the
+    // rectangle count alone — which is what this did — cut the stem above a
+    // choice that then had no image of its own, and the candidate got a
+    // question with a blank option and no way to read it.
+    //
+    // A question that runs onto the next page is never complete however many
+    // markers were found on this one: the rest of it is on a page these
     // rectangles do not cover.
-    const complete = Object.keys(optRects).length === 4 && !continuation;
-    const stemBottom = firstOptionY !== null && (!wantedOptions || complete)
-      ? firstOptionY - 1
-      : bandBottom;
+    const located = Object.keys(optRects).length === 4 && !continuation;
+    const optionFiles = {};
+    if (located || !wantedOptions) {
+      for (const [letter, rect] of Object.entries(optRects)) {
+        const name = write(`${w.baseName}_${letter}.png`, rect);
+        if (name) optionFiles[letter] = name;
+      }
+    }
+    const complete = !wantedOptions || (located && Object.keys(optionFiles).length === 4);
+
+    // Partial crops are worse than none: three options beside a fourth blank
+    // row reads as though the paper printed three. When they are not all
+    // there, the stem below carries the lot instead.
+    if (complete && wantedOptions) mine.options = optionFiles;
+    else for (const name of Object.values(optionFiles)) discard(outDir, name);
+
+    const stemBottom = firstOptionY !== null && complete ? firstOptionY - 1 : bandBottom;
     if (continuation) {
       // Both pages, as one image, so nothing the paper printed is off the edge.
       mine.stem = writeSpan(`${w.baseName}_Q.png`, [colX0, bandTop, colX1, bandBottom], continuation);
@@ -641,15 +714,6 @@ export function extractFigures({ pdfPath, outDir, wanted, mode }) {
       mine.stem = write(`${w.baseName}_Q.png`, [colX0, bandTop, colX1, bandBottom]);
     }
 
-    // Partial crops are worse than none: three options beside a fourth blank
-    // row reads as though the paper printed three. The full stem above carries
-    // all four, so show that instead.
-    if (complete || !wantedOptions) {
-      for (const [letter, rect] of Object.entries(optRects)) {
-        const name = write(`${w.baseName}_${letter}.png`, rect);
-        if (name) (mine.options ||= {})[letter] = name;
-      }
-    }
     // Tell the caller whether the choices are inside the stem image, so a row
     // can be marked and the UI can say "the choices are in the image" instead
     // of "not readable".
