@@ -212,13 +212,27 @@ function normaliseAnswer(raw, { section, fromOptionNumber }) {
   if (VOID_ANSWER.test(value)) return { answer: null, void: true, reason: value };
 
   if (section === "A") {
-    // MathonGo prints the option's number, ALLEN prints its letter.
+    // Read the FORM of the answer, do not assume it from the source.
+    //
+    // MathonGo prints the option's number and ALLEN was taken to print its
+    // letter — true of the 2022 booklets, which label their options (A)-(D).
+    // The 2023 booklets label them (1)-(4) and print "Official Ans. by NTA (1)"
+    // to match. Told to expect a letter, this found none in "1" and returned
+    // no answer; the caller then filed the question as BONUS, and because 2023
+    // is mostly ALLEN that silently awarded full marks to every candidate on
+    // 699 of the year's 2,160 questions.
+    //
+    // A single number 1-4 and a single letter A-D cannot be confused, so both
+    // are simply accepted whichever source it came from.
+    const digit = /^\(?\s*([1-4])\s*\)?$/.exec(value);
+    if (digit) return { answer: "ABCD"[Number(digit[1]) - 1], void: false };
+    const m = /\b([A-D])\b/.exec(value.toUpperCase());
+    if (m) return { answer: m[1], void: false };
     if (fromOptionNumber) {
       const n = Number(value);
       return n >= 1 && n <= 4 ? { answer: "ABCD"[n - 1], void: false } : { answer: null, void: false };
     }
-    const m = /\b([A-D])\b/.exec(value.toUpperCase());
-    return m ? { answer: m[1], void: false } : { answer: null, void: false };
+    return { answer: null, void: false };
   }
 
   // Section B is numerical.
@@ -428,7 +442,19 @@ async function main() {
       });
       // Bonus/dropped questions are kept too — NTA awarded marks to everyone,
       // so they belong in the paper even though they have no single key.
-      if (row.status === "void" || !row.correctAnswer) { row.status = "bonus"; voided.push(row); }
+      //
+      // "needs_review" is excluded, and the omission here was expensive. It
+      // also has no key, but for the opposite reason: bonus means the board
+      // awarded the marks to everybody, needs_review means we could not work
+      // out what the answer was. The MathonGo branch below has always drawn
+      // that line; this one did not, and because the 2023 papers are mostly
+      // ALLEN booklets, 699 of that year's 2,160 questions were stored as
+      // bonus — a third of the paper scoring full marks for every candidate
+      // no matter what they answered.
+      if (row.status !== "needs_review" && (row.status === "void" || !row.correctAnswer)) {
+        row.status = "bonus";
+        voided.push(row);
+      }
       note(row);
     }
   }
