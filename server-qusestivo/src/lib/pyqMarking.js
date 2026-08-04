@@ -24,17 +24,23 @@
  * board accepted both a fraction and a percentage — so any range satisfies it.
  */
 export function numericallyEqual(a, b) {
-  const x = Number(a);
+  // A candidate can type a Unicode minus as readily as a key can be typeset
+  // with one, and Number("−5") is NaN.
+  const x = Number(String(a ?? "").replace(/[−‒–—―]/g, "-").trim());
   if (!Number.isFinite(x)) return false;
 
-  const key = String(b ?? "");
+  // Normalised the same way the importer normalises a key, so a row written
+  // before that normalisation existed still scores correctly.
+  const key = String(b ?? "").replace(/[−‒–—―]/g, (m, i, s) =>
+    /[\d.]$/.test(s.slice(0, i).trim()) ? " to " : "-"
+  );
   // The papers are keyed to 2dp at most, so this tolerance only absorbs float
   // representation, never a genuinely different answer.
   const EPS = 0.005;
 
   const ranges = [];
   for (const part of key.split(/\bor\b/i)) {
-    const r = /^\s*(-?[\d.]+)\s*(?:to|–|—|-)\s*(-?[\d.]+)\s*$/i.exec(part);
+    const r = /^\s*(-?[\d.]+)\s*(?:to|-)\s*(-?[\d.]+)\s*$/i.exec(part);
     if (r) {
       const lo = Number(r[1]);
       const hi = Number(r[2]);
@@ -124,6 +130,16 @@ export function markPaper(questions, responses, opts = {}) {
       // Awarded to everyone on the day, whether or not they answered.
       verdict = "bonus";
       marks = q.marksCorrect;
+    } else if (q.correctAnswer === null || q.correctAnswer === undefined) {
+      // We do not know the answer to this one — status "needs_review", or a key
+      // the source printed as something other than an answer.
+      //
+      // Without this it fell through to the comparison below, which no response
+      // can satisfy, so the candidate was marked WRONG and given the negative
+      // marks for a question nobody knows the answer to. Not counted is the
+      // only honest verdict; it is deliberately NOT "bonus", which would hand
+      // out full marks for the same unknown.
+      verdict = "not_counted";
     } else if (!counted.has(q.id)) {
       verdict = "not_counted";
     } else if (answer === null) {

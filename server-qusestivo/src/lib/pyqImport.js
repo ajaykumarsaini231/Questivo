@@ -178,14 +178,34 @@ export function validatePyqRow(row, ctx = {}, index = 0) {
     // A key may also offer alternatives: "0.14 to 0.16 or 14 to 16", where the
     // board accepted the fraction and the percentage. Kept whole; scored by
     // numericallyEqual() in pyqController.js.
-    const RANGE = /^-?[\d.]+\s*(?:to|–|—)\s*-?[\d.]+(?:\s+or\s+-?[\d.]+\s*(?:to|–|—)\s*-?[\d.]+)*$/i;
-    if (RANGE.test(correctAnswer)) {
-      if (questionType === "integer" && /\./.test(correctAnswer)) {
+    //
+    // The minus sign is normalised FIRST. A key typeset with U+2212 — which is
+    // the minus a typesetter reaches for, and what "−233.5 to −232.5" arrives
+    // as — failed the ASCII-only range test, fell through to the single-number
+    // fallback, and matched "233.5" with the optional "-" empty. The stored
+    // answer was the positive of the real one, so every candidate who got it
+    // right was marked wrong and every candidate who dropped the sign was
+    // marked right. Hyphen-minus, en-dash and em-dash as SEPARATORS are handled
+    // by the same pass, since GATE writes both "1.5 to 1.7" and "1.5 - 1.7".
+    const canonical = correctAnswer
+      .replace(/[−‒–—―]/g, (m, i, s) => {
+        // A dash between two numbers separates a range; one in front of a
+        // number is its sign. Read from what surrounds it rather than assumed.
+        const before = s.slice(0, i).trim();
+        return /[\d.]$/.test(before) ? " to " : "-";
+      })
+      .replace(/(\d)\s*-\s*(\d)/g, "$1 to $2")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    const RANGE = /^-?[\d.]+\s+to\s+-?[\d.]+(?:\s+or\s+-?[\d.]+\s+to\s+-?[\d.]+)*$/i;
+    if (RANGE.test(canonical)) {
+      if (questionType === "integer" && /\./.test(canonical)) {
         return err(`integer answer "${correctAnswer}" is not a whole number`);
       }
-      correctAnswer = correctAnswer.replace(/\s+/g, " ").toLowerCase();
+      correctAnswer = canonical.toLowerCase();
     } else {
-      const num = correctAnswer.match(/-?\d+(?:\.\d+)?/);
+      const num = canonical.match(/-?\d+(?:\.\d+)?/);
       if (!num) return err(`${questionType} answer "${correctAnswer}" is not a number`);
       if (questionType === "integer" && !/^-?\d+$/.test(num[0])) {
         return err(`integer answer "${num[0]}" is not a whole number`);

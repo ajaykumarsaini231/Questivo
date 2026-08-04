@@ -120,6 +120,16 @@ export interface Availability {
   bySubject: { subject: string; count: number }[];
   byType: { questionType: string; count: number }[];
   totalMarksIfAll: number;
+  /**
+   * Per-slot supply, because the draw is not one pool.
+   *
+   * planPaper splits the requested count across subjects and then across
+   * Section A and B, and every slot must be filled from its own pool or the
+   * whole request is refused. `shortSlots` is the ones that cannot be — the
+   * reason a paper will not build, named rather than left to guess at.
+   */
+  slots?: { subject: string; section: string; need: number; have: number }[];
+  shortSlots?: { subject: string; section: string; need: number; have: number }[];
 }
 
 /** Turn a selection into query parameters, omitting anything not chosen. */
@@ -156,6 +166,44 @@ async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
 }
 
 export const fetchExams = (signal?: AbortSignal) => get<ExamOption[]>("/api/pyq/exams", signal);
+
+/** One slot of a full-length paper — a subject's section, and whether the
+ *  archive can fill it. */
+export interface FullTestRow {
+  subject: string;
+  label: string | null;
+  questionTypes: string[] | null;
+  marks: number | null;
+  needed: number;
+  available: number;
+  short: number;
+}
+
+/**
+ * The official shape of one exam's full paper.
+ *
+ * Read before the Full Test card renders, so the card can state the real
+ * paper's numbers and be disabled with a reason rather than failing after the
+ * click.
+ */
+export interface FullTestPattern {
+  examCode: string;
+  label: string;
+  /** Which year's pattern this is, and anything it cannot reproduce. */
+  patternNote: string;
+  /** True when this is representative practice rather than the official shape. */
+  approximate: boolean;
+  durationMinutes: number;
+  sectionBAttemptLimit: number | null;
+  totalQuestions: number;
+  totalMarks: number;
+  rows: FullTestRow[];
+  canGenerate: boolean;
+  shortBy: number;
+}
+
+export const fetchFullTests = (signal?: AbortSignal) =>
+  get<FullTestPattern[]>("/api/pyq/full-tests", signal);
 
 /**
  * The filters for one exam, narrowed by whatever is already chosen.

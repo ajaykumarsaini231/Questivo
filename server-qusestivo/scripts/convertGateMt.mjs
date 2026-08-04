@@ -360,20 +360,34 @@ function toRow(q, k, facets, sourceFile) {
   const questionType = k ? TYPE_MAP[k.type] ?? "mcq_single" : "mcq_single";
   const marks = k?.marks ?? 1;
 
-  // The key column occasionally carries the subject glued onto the answer —
-  // "MTA" where the table meant "MT" and "A" — so the letters are taken from
-  // the end. Only for single-choice: an MSQ key is already several letters and
-  // a NAT key is a range.
+  // "MTA" in the key column is the board's own note that it gave MARKS TO ALL
+  // — the question was dropped and every candidate scored it. It is not an
+  // answer.
+  //
+  // An earlier version took the trailing letter of the key cell, on the theory
+  // that "MTA" was the subject "MT" glued to the answer "A". It is not: the key
+  // table gives the subject its own column, and parseGateKey captures it
+  // separately, so nothing can arrive here glued. What that repair actually did
+  // was mark every dropped question as answer A — telling a candidate who put B
+  // that they were wrong about a question the board awarded to everybody.
+  const MARKS_TO_ALL = /^(MTA|MARKS?\s*TO\s*ALL|ALL|BONUS|DROPPED|CANCELLED)$/i;
+
   let answer = null;
+  let awardedToAll = false;
   if (k) {
-    if (k.type === "MCQ") {
-      const m = /([A-D])\s*$/.exec(k.key.toUpperCase());
+    const raw = k.key.trim();
+    if (MARKS_TO_ALL.test(raw)) {
+      awardedToAll = true;
+    } else if (k.type === "MCQ") {
+      // Exactly one letter, standing alone. A cell that holds anything else is
+      // not a single-choice answer and is left unkeyed rather than guessed at.
+      const m = /^\(?\s*([A-D])\s*\)?$/.exec(raw.toUpperCase());
       answer = m ? m[1] : null;
     } else if (k.type === "MSQ") {
-      const letters = [...new Set(k.key.toUpperCase().match(/[A-D]/g) ?? [])].sort();
+      const letters = [...new Set(raw.toUpperCase().match(/[A-D]/g) ?? [])].sort();
       answer = letters.length ? letters.join(",") : null;
     } else {
-      answer = k.key; // "1.5 to 1.7" — scored as a range, see numericallyEqual
+      answer = raw; // "1.5 to 1.7" — scored as a range, see numericallyEqual
     }
   }
 
@@ -416,8 +430,17 @@ function toRow(q, k, facets, sourceFile) {
 
     // No key means no answer, and no answer means the question is kept but not
     // scored. Inventing one teaches the mistake.
-    status: k ? "ok" : "needs_review",
-    voidReason: k ? null : "no row for this question in the published key",
+    // Three states, and they are not interchangeable. "bonus" means the board
+    // awarded the marks to everyone; "needs_review" means we could not work out
+    // the answer; "ok" means we know it.
+    status: awardedToAll ? "bonus" : k && answer !== null ? "ok" : "needs_review",
+    voidReason: awardedToAll
+      ? "the board awarded this question to all candidates (MTA in the official key)"
+      : k
+        ? answer === null
+          ? `the key cell for this question reads "${k.key}", which is not an answer`
+          : null
+        : "no row for this question in the published key",
 
     needsFigure: false,
     figureHint: null,

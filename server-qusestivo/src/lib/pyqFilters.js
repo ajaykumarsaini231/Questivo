@@ -27,12 +27,41 @@ export const DRAWABLE = {
   status: "ok",
 };
 
+/**
+ * How many values one filter may carry.
+ *
+ * Each becomes an SQL `IN (...)`, and these endpoints are public and
+ * unauthenticated, so a query string with fifty thousand comma-separated
+ * entries is a free way to make the database do work. No real selection is
+ * anywhere near this: the deepest facet in the archive has a few hundred
+ * chapters.
+ */
+const MAX_LIST = 500;
+
 const list = (v) =>
   (Array.isArray(v) ? v : typeof v === "string" ? v.split(",") : [])
     .map((x) => (typeof x === "string" ? x.trim() : x))
-    .filter((x) => x !== "" && x !== null && x !== undefined);
+    .filter((x) => x !== "" && x !== null && x !== undefined)
+    .slice(0, MAX_LIST);
 
-const ints = (v) => list(v).map(Number).filter(Number.isFinite);
+/**
+ * Whole numbers only, and only plausible ones.
+ *
+ * `year`, `shift` and `marks` are Int columns; a fractional or astronomically
+ * large value reaches Postgres as an out-of-range integer and the whole request
+ * 500s rather than simply matching nothing.
+ */
+const ints = (v) =>
+  list(v)
+    .map(Number)
+    .filter((n) => Number.isSafeInteger(n) && Math.abs(n) <= 100000);
+
+/** A flag from a query string, where everything arrives as text. */
+const truthy = (v) => {
+  if (typeof v === "boolean") return v;
+  if (v === null || v === undefined) return false;
+  return !/^(0|false|no|off|)$/i.test(String(v).trim());
+};
 
 /**
  * Read a filter selection off a query string or a JSON body.
@@ -70,7 +99,11 @@ export function normalizeSpec(raw = {}) {
     totalQuestions: num(raw.totalQuestions),
     // Questions the extraction could not render as text and has no crop for.
     // Excluded by default: a paper is no use if a question in it cannot be read.
-    includeNeedsFigure: Boolean(raw.includeNeedsFigure),
+    //
+    // NOT Boolean(): a query string carries strings, and Boolean("false") and
+    // Boolean("0") are both true — so `?includeNeedsFigure=false` turned the
+    // exclusion OFF, which is the opposite of what it says.
+    includeNeedsFigure: truthy(raw.includeNeedsFigure),
   };
 }
 
@@ -202,16 +235,22 @@ export async function examFacets(prisma, examCode, scope = {}) {
   return {
     total,
     years: years.map((y) => ({ year: y.year, count: y._count._all })),
+    // Only sessions that carry a LABEL. buildQuestionWhere matches a chosen
+    // session against the `session` and `sessionLabel` columns and never
+    // against `sessionNumber`, so a row with a number but no label used to be
+    // advertised as "Session 2" with a value of "2" — and picking it matched
+    // nothing at all, which reads as an archive with a hole in it rather than
+    // as a filter that does not work.
     sessions: dedupe(
       sessions
-        .filter((x) => x.sessionLabel || x.sessionNumber !== null)
+        .filter((x) => x.sessionLabel)
         .map((x) => ({
-          value: x.sessionLabel ?? String(x.sessionNumber),
+          value: x.sessionLabel,
           number: x.sessionNumber,
-          label: x.sessionLabel ?? `Session ${x.sessionNumber}`,
+          label: x.sessionLabel,
           count: x._count._all,
         }))
-    ).sort((a, b) => (a.number ?? 99) - (b.number ?? 99)),
+    ).sort((a, b) => (a.number ?? 99) - (b.number ?? 99) || a.label.localeCompare(b.label)),
     shifts: shifts
       .filter((x) => x.shift !== null)
       .map((x) => ({ value: x.shift, label: x.shiftLabel ?? `Shift ${x.shift}`, count: x._count._all }))

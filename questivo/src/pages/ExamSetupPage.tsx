@@ -36,15 +36,27 @@ import {
   fetchAvailability,
   fetchExamFilters,
   fetchExams,
+  fetchFullTests,
   toParams,
   QUESTION_TYPE_LABEL,
   type Availability,
   type ExamFilters,
   type ExamOption,
   type FilterSelection,
+  type FullTestPattern,
 } from "../lib/examSetup";
 
-type Mode = "pyq" | "mock";
+/**
+ * Three ways to sit a paper, and they differ in WHO chooses what:
+ *
+ *   pyq   one stored shift, exactly as printed. The candidate chooses which.
+ *   full  the official pattern for this exam — subjects, counts and type split
+ *         all fixed by the board. The candidate chooses nothing but the exam,
+ *         which is the point: a full mock you can tune is not a full mock.
+ *   mock  a partial test. The candidate's filters ARE the specification, and
+ *         the generator draws only from what they match.
+ */
+type Mode = "pyq" | "full" | "mock";
 
 const STEPS = ["Exam", "Type", "Filters", "Preview", "Start"] as const;
 
@@ -59,6 +71,7 @@ export default function ExamSetupPage() {
   const [avail, setAvail] = useState<Availability | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [fullTests, setFullTests] = useState<FullTestPattern[]>([]);
 
   const step = !examCode ? 0 : !mode ? 1 : 2;
 
@@ -72,11 +85,33 @@ export default function ExamSetupPage() {
     return () => ac.abort();
   }, []);
 
+  // Loaded once alongside the exam list, not on demand: the Full Test card has
+  // to state the paper's real numbers the moment the exam is picked, and a
+  // spinner inside a choice card is worse than one extra request on load.
+  useEffect(() => {
+    const ac = new AbortController();
+    fetchFullTests(ac.signal)
+      .then(setFullTests)
+      .catch(() => setFullTests([])); // the other two modes still work
+    return () => ac.abort();
+  }, []);
+
   /* ------------------------------- step 3 -------------------------------- */
 
   // Refetched whenever the selection changes so every count reflects it. The
   // request is aborted on the way out, so a slow response for an earlier
   // selection cannot land after a newer one and show stale numbers.
+  //
+  // Keyed on the ENCODED selection, not the object.
+  //
+  // `sel` gets a new identity on every keystroke in the question-count box and
+  // on every difficulty change, and neither narrows anything — the facet counts
+  // do not depend on how many questions you want. Depending on the object sent
+  // eight aggregate queries per digit typed. The encoded string is the same for
+  // any two selections that would produce the same query, so it settles.
+  const facetKey = toParams({ ...sel, totalQuestions: undefined, difficulty: "mixed" }).toString();
+  const availKey = toParams(sel).toString();
+
   useEffect(() => {
     if (!examCode) return;
     const ac = new AbortController();
@@ -84,7 +119,8 @@ export default function ExamSetupPage() {
       .then(setFilters)
       .catch((e) => e.name !== "AbortError" && setError(e.message));
     return () => ac.abort();
-  }, [examCode, sel]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [examCode, facetKey]);
 
   useEffect(() => {
     if (!examCode || mode !== "mock") return;
@@ -93,7 +129,8 @@ export default function ExamSetupPage() {
       .then(setAvail)
       .catch((e) => e.name !== "AbortError" && setError(e.message));
     return () => ac.abort();
-  }, [examCode, mode, sel]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [examCode, mode, availKey]);
 
   /* ------------------------------ selection ------------------------------ */
 
@@ -128,7 +165,12 @@ export default function ExamSetupPage() {
     }
     setBusy(true);
     try {
-      const p = toParams(sel);
+      // A full test carries the exam and nothing else. Sending the filter
+      // selection along would be harmless today — the server ignores filters in
+      // full mode — but it would put a specification in the URL that the paper
+      // does not honour, which is the kind of thing that becomes a bug the
+      // moment someone reads the query string and believes it.
+      const p = mode === "full" ? new URLSearchParams({ mode: "full" }) : toParams(sel);
       p.set("examCode", examCode);
       navigate(`/pyq/practice?${p}`);
     } finally {
@@ -139,6 +181,7 @@ export default function ExamSetupPage() {
   /* -------------------------------- render ------------------------------- */
 
   const exam = exams.find((e) => e.examCode === examCode) ?? null;
+  const fullTest = fullTests.find((f) => f.examCode === examCode) ?? null;
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-8">
@@ -187,8 +230,8 @@ export default function ExamSetupPage() {
 
       {/* ── step 2: kind ─────────────────────────────────────────────────── */}
       {examCode && (
-        <Section n={2} title="Select paper type" done={Boolean(mode)}>
-          <div className="grid gap-3 sm:grid-cols-2">
+        <Section n={2} title="Select test type" done={Boolean(mode)}>
+          <div className="grid gap-3 sm:grid-cols-3">
             <ModeCard
               active={mode === "pyq"}
               disabled={!exam?.canSitPapers}
@@ -197,18 +240,42 @@ export default function ExamSetupPage() {
               onClick={() => setMode("pyq")}
             />
             <ModeCard
+              active={mode === "full"}
+              // Disabled with its reason attached rather than hidden: an exam
+              // whose archive is a few questions short today will be able to
+              // build a full paper next month, and "not enough questions yet"
+              // is a far better answer than the option silently not existing.
+              disabled={!fullTest?.canGenerate}
+              title="Full Test"
+              detail={
+                fullTest
+                  ? `${fullTest.totalQuestions} questions · ${fullTest.totalMarks} marks · ${fullTest.durationMinutes} min. The official pattern — every subject, drawn at random from real questions.`
+                  : "No full-length pattern for this exam yet."
+              }
+              onClick={() => setMode("full")}
+            />
+            <ModeCard
               active={mode === "mock"}
               disabled={!exam?.canGenerate}
-              title="Practice / mock test"
-              detail="Drawn only from the chapters, years and question types you choose below."
+              title="Partial Test"
+              detail="Your own subject, chapters, years and length. Drawn only from what you choose."
               onClick={() => setMode("mock")}
             />
           </div>
         </Section>
       )}
 
-      {/* ── step 3: filters ──────────────────────────────────────────────── */}
-      {examCode && mode && filters && (
+      {/* ── step 3: the official pattern, or the filters ─────────────────── */}
+      {/* A full test has nothing to configure — that is what makes it a full
+          test — so this step shows the pattern it will follow instead of
+          asking anything. */}
+      {examCode && mode === "full" && fullTest && (
+        <Section n={3} title={`${fullTest.label} · official pattern`} done>
+          <FullTestSummary pattern={fullTest} />
+        </Section>
+      )}
+
+      {examCode && mode !== "full" && mode && filters && (
         <Section n={3} title={`Filters for ${filters.label}`} done={false}>
           {mode === "pyq" ? (
             <PaperPicker filters={filters} sel={sel} setSel={setSel} />
@@ -563,9 +630,27 @@ function Preview({
         <div className="mt-0.5 text-sm text-slate-700">
           {avail.enough
             ? `Your paper will use ${drawn} of them, drawn at random from this pool and nowhere else.`
-            : `You asked for ${sel.totalQuestions} — that is ${avail.shortBy} more than exist under these filters. ` +
-              `Nothing outside your selection will be substituted in.`}
+            : `You asked for ${sel.totalQuestions}. Nothing outside your selection will be substituted in.`}
         </div>
+        {/* Which slot it fails on. The paper is not drawn from one pool — the
+            count is split across subjects and sections, and a total that looks
+            sufficient can still leave one slot short. Saying which one is the
+            difference between a fixable message and a dead end. */}
+        {!avail.enough && (avail.shortSlots?.length ?? 0) > 0 && (
+          <ul className="mt-2 space-y-0.5 text-sm text-amber-900">
+            {avail.shortSlots!.map((s) => (
+              <li key={`${s.subject}-${s.section}`}>
+                {s.subject}
+                {s.section === "B" ? " (numerical)" : ""}: needs {s.need}, {s.have} available
+              </li>
+            ))}
+          </ul>
+        )}
+        {!avail.enough && !(avail.shortSlots?.length ?? 0) && avail.shortBy > 0 && (
+          <p className="mt-1 text-sm text-amber-900">
+            {avail.shortBy} more than exist under these filters.
+          </p>
+        )}
       </div>
 
       <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -585,6 +670,83 @@ function Preview({
         />
       )}
       {named.length > 0 && <FactList label="Chapters / topics selected" items={named} />}
+    </div>
+  );
+}
+
+/**
+ * What a full paper will contain, before it is drawn.
+ *
+ * Every row shows needed against available, because the one question a
+ * candidate has about a generated paper is whether it is really the exam's
+ * shape. Showing the arithmetic answers it; a "Generate" button that just works
+ * asks them to take it on trust.
+ */
+function FullTestSummary({ pattern }: { pattern: FullTestPattern }) {
+  const bySubject = pattern.rows.reduce<Record<string, typeof pattern.rows>>((acc, r) => {
+    (acc[r.subject] ||= []).push(r);
+    return acc;
+  }, {});
+
+  return (
+    <div>
+      <div className="mb-4 grid gap-3 sm:grid-cols-3">
+        <Fact label="Questions" value={String(pattern.totalQuestions)} />
+        <Fact label="Marks" value={String(pattern.totalMarks)} />
+        <Fact label="Duration" value={`${pattern.durationMinutes} min`} />
+      </div>
+
+      <p className="mb-4 text-sm text-slate-600">{pattern.patternNote}</p>
+
+      {/* Said plainly where the paper is practice rather than a reproduction.
+          A candidate planning their revision around "the official pattern"
+          deserves to know when it is not one. */}
+      {pattern.approximate && (
+        <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          This exam changes its structure most years, so this is representative
+          full-length practice rather than a reproduction of one official paper.
+        </div>
+      )}
+
+      <div className="overflow-x-auto rounded-lg border border-slate-200">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+            <tr>
+              <th className="px-4 py-2.5 font-semibold">Subject</th>
+              <th className="px-4 py-2.5 font-semibold">Section</th>
+              <th className="px-4 py-2.5 text-right font-semibold">Questions</th>
+              <th className="px-4 py-2.5 text-right font-semibold">In the bank</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {Object.entries(bySubject).map(([subject, rows]) =>
+              rows.map((r, i) => (
+                <tr key={`${subject}-${i}`} className={r.short ? "bg-rose-50" : undefined}>
+                  <td className="px-4 py-2.5 font-medium text-slate-800">{i === 0 ? subject : ""}</td>
+                  <td className="px-4 py-2.5 text-slate-600">
+                    {r.label ?? (r.marks != null ? `${r.marks}-mark` : "All questions")}
+                  </td>
+                  <td className="px-4 py-2.5 text-right font-semibold text-slate-900">{r.needed}</td>
+                  <td
+                    className={`px-4 py-2.5 text-right ${r.short ? "font-semibold text-rose-700" : "text-slate-500"}`}
+                  >
+                    {r.available}
+                    {r.short > 0 && ` — ${r.short} short`}
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {!pattern.canGenerate && (
+        <div className="mt-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900">
+          <strong>This paper cannot be built yet.</strong> The rows above in red do not
+          have enough questions stored. A short paper would score out of the wrong
+          total, so nothing is generated — try a Partial Test instead.
+        </div>
+      )}
     </div>
   );
 }

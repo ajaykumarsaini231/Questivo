@@ -3,7 +3,8 @@ import { chat, ROLES } from "../lib/aiClient.js";
 import { PYQ_EXAMS, resolvePyqExamCode, profileToBrief } from "../lib/pyqPattern.js";
 import { buildPyqProfile } from "../lib/pyqProfile.js";
 import { markPaper, MARKING_SELECT } from "../lib/pyqMarking.js";
-import { generatePaper, GENERATOR_PATTERNS } from "../lib/pyqGenerator.js";
+import { generatePaper, planPaper, GENERATOR_PATTERNS } from "../lib/pyqGenerator.js";
+import { generateFullTest, listFullTestPatterns } from "../lib/pyqBlueprints.js";
 import { DRAWABLE, buildQuestionWhere, examFacets, normalizeSpec } from "../lib/pyqFilters.js";
 
 /* ------------------------------ read APIs ------------------------------- */
@@ -292,6 +293,12 @@ export const listPyqPapers = async (req, res) => {
     const data = [...byExam.values()].map((e) => ({
       examCode: e.examCode,
       label: e.label,
+      /// How many shifts this exam has in the archive. Drives the order below,
+      /// and worth sending anyway — the picker can say "30 papers" on the chip.
+      paperCount: [...e.years.values()].reduce(
+        (total, y) => total + [...y.sessions.values()].reduce((n, s) => n + s.papers.length, 0),
+        0
+      ),
       years: [...e.years.values()]
         .sort((a, b) => b.year - a.year)
         .map((y) => ({
@@ -301,6 +308,23 @@ export const listPyqPapers = async (req, res) => {
           ),
         })),
     }));
+
+    /**
+     * Deepest archive first — NOT alphabetical.
+     *
+     * The picker opens on whichever exam this list puts first, and the query
+     * above orders by examCode, so adding the single GATE MT paper silently
+     * moved the landing view off JEE Main's 30 shifts (a full year → session →
+     * date & shift grid, which is the point of this screen) and onto one GATE
+     * card with no session row and no shifts at all. Nothing had been removed;
+     * "G" simply sorts before "J".
+     *
+     * Ordering by how many papers an exam actually has makes the default the
+     * exam a visitor is most likely to want, and keeps doing so as the archive
+     * grows — no hard-coded favourite to update every time an exam is added.
+     * Label breaks ties so the order is stable between requests.
+     */
+    data.sort((a, b) => b.paperCount - a.paperCount || a.label.localeCompare(b.label));
 
     res.json({ success: true, data });
   } catch (err) {
@@ -513,6 +537,13 @@ async function recordAttempt(userId, a) {
  * strings; POST /generate carries real JSON arrays. Normalising both here means
  * the generator never has to know which door the request came through.
  */
+/**
+ * Ceiling on a drawn paper. The marker, the palette and the review list all
+ * render every question, so this is a rendering limit as much as a load one.
+ * Comfortably above the longest real paper here (NEET's 180).
+ */
+const MAX_GENERATED_QUESTIONS = 200;
+
 function readGenerateSpec(req) {
   const src = { ...(req.query || {}), ...(req.body || {}) };
 
@@ -527,9 +558,26 @@ function readGenerateSpec(req) {
   // Every filter the picker offers is carried through to the draw. One that is
   // read here but not passed on is worse than one that does not exist: the UI
   // shows it as applied, the preview counts it, and the paper ignores it.
+  // An exam code we do not recognise is an ERROR, not a reason to pick one.
+  //
+  // This used to fall back to JEE_MAIN whenever resolvePyqExamCode returned
+  // null — which it does for GATE_CS, for UPSC, and for any typo. A candidate
+  // who asked for GATE Computer Science was handed a JEE Main paper with no
+  // indication that anything had been substituted, and would have sat it.
+  const asked = src.examCode || "JEE_MAIN";
+  const examCode = resolvePyqExamCode(asked);
+  if (!examCode) {
+    const err = new Error(
+      `No previous year questions for "${asked}". Supported: ${Object.keys(PYQ_EXAMS).join(", ")}.`
+    );
+    err.status = 404;
+    err.canRequest = true;
+    throw err;
+  }
+
   const spec = {
     ...normalizeSpec(src),
-    examCode: resolvePyqExamCode(src.examCode || "JEE_MAIN") || "JEE_MAIN",
+    examCode,
     subjects: list(src.subjects),
     chapters: list(src.chapters),
     years: list(src.years).map(Number).filter(Number.isFinite),
@@ -539,9 +587,22 @@ function readGenerateSpec(req) {
   };
 
   if (src.totalQuestions != null && Number(src.totalQuestions) > 0) {
-    // Capped: the marker, the palette and the review list all render every
-    // question, and a request for ten thousand is a mistake or an attack.
-    spec.totalQuestions = Math.min(Number(src.totalQuestions), 200);
+    // Capped, and the cap REFUSES rather than truncating.
+    //
+    // Math.min() here quietly turned a request for 400 questions into a
+    // 200-question paper with nothing said — the candidate asks for one paper
+    // and sits a different one, which is the same silent-shortening failure the
+    // "not enough questions" refusal exists to prevent. A limit the caller
+    // cannot see them hit is worse than no limit.
+    const asked = Number(src.totalQuestions);
+    if (asked > MAX_GENERATED_QUESTIONS) {
+      const err = new Error(
+        `A generated paper can hold at most ${MAX_GENERATED_QUESTIONS} questions; you asked for ${asked}.`
+      );
+      err.status = 400;
+      throw err;
+    }
+    spec.totalQuestions = asked;
   }
   if (src.durationMinutes != null && Number(src.durationMinutes) > 0) {
     spec.durationMinutes = Math.min(Number(src.durationMinutes), 600);
@@ -562,13 +623,36 @@ function readGenerateSpec(req) {
 export const generateMockPaper = async (req, res) => {
   try {
     const spec = readGenerateSpec(req);
+
+    /**
+     * TWO KINDS OF TEST, AND THEY ARE NOT THE SAME FEATURE.
+     *
+     * A FULL test is the official paper's shape: the exam decides the subjects,
+     * the counts and the type split, and the candidate chooses nothing beyond
+     * which exam. Letting a filter through here would quietly produce a "full
+     * NEET mock" that was 180 questions of Modern Physics.
+     *
+     * A PARTIAL test is the opposite: the candidate's filters are the whole
+     * specification, and the generator's job is to honour them exactly or say
+     * why it cannot.
+     */
+    const mode = (req.body?.mode || req.query?.mode) === "full" ? "full" : "partial";
+
+    if (mode === "full") {
+      const { paper, questions, audit } = await generateFullTest(spec.examCode);
+      return res.json({
+        success: true,
+        data: { paper, questions, audit, spec: { examCode: spec.examCode, mode: "full" } },
+      });
+    }
+
     const { paper, questions, warnings } = await generatePaper(spec);
     res.json({
       success: true,
       data: {
         paper,
         questions,
-        spec,
+        spec: { ...spec, mode: "partial" },
         // Never silent about a substitution: a chapter that could not be filled
         // or a difficulty the archive cannot yet evidence is said out loud.
         ...(warnings.length ? { warnings } : {}),
@@ -582,7 +666,26 @@ export const generateMockPaper = async (req, res) => {
       // So the UI can say "56 available, you asked for 100" rather than only
       // repeating the sentence. Sent whenever the draw ran short.
       ...(err.available !== undefined ? { available: err.available, needed: err.needed } : {}),
+      // The per-slot shortfall for a full paper — which subject, how many
+      // short — so the screen can name the gap instead of just refusing.
+      ...(err.audit ? { audit: err.audit } : {}),
     });
+  }
+};
+
+/**
+ * The official pattern of every exam that can produce a full-length paper,
+ * with a live count of whether the archive can currently fill it.
+ *
+ * Fetched before the candidate presses anything, so the Full Test card shows
+ * the real paper's shape — 180 questions, 720 marks, 180 minutes — and is
+ * disabled with a reason rather than failing after the click.
+ */
+export const listFullTests = async (_req, res) => {
+  try {
+    res.json({ success: true, data: await listFullTestPatterns() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 };
 
@@ -770,6 +873,45 @@ export const countAvailable = async (req, res) => {
     const asked = spec.totalQuestions;
     const marks = await prisma.previousYearQuestion.aggregate({ where, _sum: { marksCorrect: true } });
 
+    // "Enough" has to mean enough FOR THE PAPER THE DRAW WILL BUILD, not for a
+    // flat total.
+    //
+    // The generator does not take N questions from one pool: planPaper splits N
+    // across subjects by the exam's own share, and then across Section A and
+    // Section B, and every one of those slots must be filled from its own pool
+    // or the whole request is refused. A flat count of 40 against a request for
+    // 30 says "enough" while the draw is looking for 10 Section B questions in
+    // a subject that has 2 — the preview said yes and the Start button then
+    // failed. Each slot is counted the same way the draw counts it.
+    const plan = planPaper({
+      examCode,
+      subjects: spec.subjects,
+      totalQuestions: asked,
+      distribution: spec.distribution,
+    });
+
+    const slots = [];
+    if (asked && plan) {
+      for (const subject of plan.chosen) {
+        for (const section of ["A", "B"]) {
+          const need = plan.plan[subject]?.[section] ?? 0;
+          if (!need) continue;
+          const slotWhere = buildQuestionWhere(
+            { ...spec, examCode, subjects: [subject] },
+            section === "A" ? { OR: [{ section: "A" }, { section: null }] } : { section: "B" }
+          );
+          slots.push({
+            subject,
+            section,
+            need,
+            have: await prisma.previousYearQuestion.count({ where: slotWhere }),
+          });
+        }
+      }
+    }
+    const short = slots.filter((s) => s.have < s.need);
+    const enough = asked ? (plan ? short.length === 0 : available >= asked) : true;
+
     res.json({
       success: true,
       data: {
@@ -778,8 +920,17 @@ export const countAvailable = async (req, res) => {
         requested: asked,
         // The one thing the preview exists to say. Left explicit rather than
         // implied by the numbers so the UI cannot get the comparison backwards.
-        enough: asked ? available >= asked : true,
+        enough,
         shortBy: asked && available < asked ? asked - available : 0,
+        // Which slot the paper would fail on, so the message can name it
+        // instead of leaving the candidate to guess which filter to widen.
+        slots,
+        shortSlots: short.map((s) => ({
+          subject: s.subject,
+          section: s.section,
+          need: s.need,
+          have: s.have,
+        })),
         bySubject: bySubject.map((s) => ({ subject: s.subject, count: s._count._all })),
         byType: byType.map((t) => ({ questionType: t.questionType, count: t._count._all })),
         // Marks and minutes for the WHOLE matching pool; the UI scales them by
