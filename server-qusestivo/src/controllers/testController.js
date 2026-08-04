@@ -1,5 +1,79 @@
-import prisma from "../prismaClient.js"; 
+import prisma from "../prismaClient.js";
 import { generateQuestionsAgent } from "../agentic-mock-test/questionGenerator.js";
+import { resolvePyqExamCode } from "../lib/pyqPattern.js";
+
+/**
+ * Build a test from stored previous year questions instead of generating one.
+ *
+ * Serves sessionType "pyq", which the UI has offered as "Previous Year Qs" all
+ * along while the backend quietly generated AI questions for it — a candidate
+ * practising what they believed were real papers was practising invented ones.
+ *
+ * Costs zero AI tokens: the questions already exist. Only single-correct MCQs
+ * are used, because TestQuestion stores exactly four options and one letter;
+ * numerical and multi-correct PYQs cannot be scored by that runner and would
+ * be marked wrong however the candidate answered.
+ *
+ * @returns {Promise<{questions: object[], available: number} | null>} null when
+ *          this exam has no PYQ bucket at all.
+ */
+export async function buildPyqPaper({ examType, topics, numQuestions }) {
+  const examCode = resolvePyqExamCode(examType);
+  if (!examCode) return null;
+
+  const where = { examCode, questionType: "mcq_single" };
+  // Respect an explicit subject/topic choice, but only when it actually
+  // narrows to something — an empty result here would look like "no PYQs".
+  if (Array.isArray(topics) && topics.length) {
+    where.OR = [{ topic: { in: topics } }, { subject: { in: topics } }];
+  }
+
+  let rows = await prisma.previousYearQuestion.findMany({
+    where,
+    orderBy: { year: "desc" },
+    take: Math.max(Number(numQuestions) || 10, 1) * 3,
+  });
+
+  if (!rows.length && where.OR) {
+    // The topic filter matched nothing; fall back to the whole exam rather
+    // than telling the candidate there are no previous year questions.
+    delete where.OR;
+    rows = await prisma.previousYearQuestion.findMany({
+      where,
+      orderBy: { year: "desc" },
+      take: Math.max(Number(numQuestions) || 10, 1) * 3,
+    });
+  }
+
+  const available = rows.length;
+  if (!available) return { questions: [], available: 0 };
+
+  // Shuffle so two attempts are not the same paper in the same order, then cut
+  // to the requested length.
+  for (let i = rows.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [rows[i], rows[j]] = [rows[j], rows[i]];
+  }
+
+  const questions = rows.slice(0, Number(numQuestions) || 10).map((q) => ({
+    exam_type: examType,
+    topic: q.topic || q.subject,
+    difficulty: "previous-year",
+    question_text: `[${q.year}${q.session ? ` ${q.session}` : ""}] ${q.questionText}`,
+    option_a: q.optionA,
+    option_b: q.optionB,
+    option_c: q.optionC,
+    option_d: q.optionD,
+    correct_option: q.correctAnswer,
+    // Solutions are generated on demand and cached on the PYQ row; a paper
+    // built here shows whichever ones already exist rather than paying to
+    // generate every one up front.
+    explanation: q.solution || "Open this question in the PYQ browser for a worked solution.",
+    diagram_svg: q.diagramSvg || null,
+  }));
+
+  return { questions, available };
+}
 
 // POST /api/tests/generate
 export async function generateTest(req, res) {
@@ -42,18 +116,66 @@ export async function generateTest(req, res) {
       });
     }
 
-    // 5. Generate questions using Agentic AI
-    const agentArgs = {
-      examType,
-      topics,
-      numQuestions,
-      difficulty,
-      sessionType,
-    };
-    // forward medium only if provided by client
-    if (medium) agentArgs.medium = medium;
+    // 5. Build the paper.
+    //
+    // PYQ-FIRST, NOT PYQ-ONLY.
+    //
+    // "pyq" is served from the stored question bank; everything else goes to
+    // the generator. Checking this BEFORE calling the AI is the point — a
+    // previous year paper should cost nothing to assemble.
+    //
+    // An empty shelf used to be a 409 that bounced the candidate back to the
+    // form to press Generate a second time. That is the wrong answer to "I
+    // want the real paper": they came here to sit a test, and the site can
+    // build them one. So the empty case now falls through to the generator in
+    // the same request and reports the substitution, rather than failing.
+    //
+    // What it must never do is stay quiet about it. `servedAs` is what gets
+    // persisted and returned, so a generated paper is never recorded — or
+    // shown — as a previous year one.
+    let questions;
+    let servedAs = sessionType;
+    let notice = null;
+    let canRequestCourse = false;
 
-    const questions = await generateQuestionsAgent(agentArgs);
+    if (sessionType === "pyq") {
+      const pyq = await buildPyqPaper({ examType, topics, numQuestions });
+
+      if (pyq?.questions.length) {
+        questions = pyq.questions;
+        if (questions.length < numQuestions) {
+          notice = `Only ${questions.length} previous year question${
+            questions.length === 1 ? " is" : "s are"
+          } stored for ${examType} so far — your paper has ${questions.length}.`;
+          console.log(
+            `[PYQ] ${examType}: asked for ${numQuestions}, only ${pyq.available} stored — serving ${questions.length}.`
+          );
+        }
+      } else {
+        // null  -> this exam has no PYQ bucket at all (worth a course request)
+        // empty -> the bucket exists but nothing is stored for it yet
+        servedAs = "practice";
+        canRequestCourse = !pyq;
+        notice = pyq
+          ? `No previous year questions are stored for ${examType} yet, so this paper was generated in the official exam pattern instead.`
+          : `Questivo does not carry previous year questions for ${examType} yet, so this paper was generated in the official exam pattern instead.`;
+        console.log(`[PYQ] ${examType}: no stored questions — falling back to the generator.`);
+      }
+    }
+
+    if (!questions) {
+      const agentArgs = {
+        examType,
+        topics,
+        numQuestions,
+        difficulty,
+        sessionType: servedAs,
+      };
+      // forward medium only if provided by client
+      if (medium) agentArgs.medium = medium;
+
+      questions = await generateQuestionsAgent(agentArgs);
+    }
 
     // ----- NEW: parse & normalize duration (accept: minutes or hours) -----
     // Accepts: durationMinutes (preferred), durationHours (e.g. 1.5), or generic duration
@@ -82,9 +204,12 @@ export async function generateTest(req, res) {
     const sessionData = {
       examType,
       difficulty,
-      sessionType,
+      // What was actually built, not what was asked for — a session recorded as
+      // "pyq" when it holds generated questions would misreport itself in the
+      // candidate's history forever.
+      sessionType: servedAs,
       numQuestions: questions.length,
-      userId, 
+      userId,
     };
 
     if (durationMinutes != null) {
@@ -141,6 +266,9 @@ export async function generateTest(req, res) {
       success: true,
       sessionId: session.id,
       count: savedQuestions.length,
+      servedAs,
+      ...(notice ? { notice } : {}),
+      ...(canRequestCourse ? { canRequestCourse } : {}),
       // questions: savedQuestions,
     });
   } catch (err) {

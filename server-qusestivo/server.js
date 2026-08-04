@@ -15,6 +15,7 @@ import userroter from './src/routes/userRoutes.js';
 import mailRoutes from "./src/routes/mailRoutes.js";
 import resumeRouter from "./src/routes/resumeRoutes.js";
 import interviewRoutes from "./src/routes/interviewRoutes.js";
+import pyqRoutes from "./src/routes/pyqRoutes.js";
 
 // Sockets
 import { initializeInterviewSocket } from "./src/agentic-mock-test/interviewSocket.js"; // 🛠️ Import your socket logic
@@ -29,10 +30,50 @@ const server = http.createServer(app); // 🛠️ Wrap express app in HTTP serve
 // Socket.io initialization
 initializeInterviewSocket(server); 
 
-app.use(cors({
-  origin: process.env.FRONTEND_URL,
-  credentials: true
-}));
+/**
+ * CORS.
+ *
+ * `origin: FRONTEND_URL` allowed exactly ONE frontend, so whichever origin was
+ * not configured got "Access-Control-Allow-Origin ... is not equal to the
+ * supplied origin" on every preflight. There is more than one legitimate
+ * frontend here — the deployed Vercel site and the local dev server — so the
+ * allow-list has to be a set, not a single string.
+ *
+ * With credentials:true the wildcard "*" is illegal, so the matched origin must
+ * be echoed back explicitly. That is what returning the origin from this
+ * function does.
+ *
+ * Extra origins: CORS_ORIGINS=https://a.com,https://b.com
+ */
+const ALLOWED_ORIGINS = new Set(
+  [
+    process.env.FRONTEND_URL,
+    ...(process.env.CORS_ORIGINS || "").split(",").map((s) => s.trim()),
+    // Vite dev server, both spellings the browser may send.
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "https://questivo.vercel.app",
+  ]
+    .filter(Boolean)
+    .map((o) => o.replace(/\/$/, ""))
+);
+
+console.log("[CORS] allowed origins:", [...ALLOWED_ORIGINS].join(", "));
+
+app.use(
+  cors({
+    origin(origin, cb) {
+      // Same-origin requests, curl and server-to-server calls send no Origin.
+      if (!origin) return cb(null, true);
+      if (ALLOWED_ORIGINS.has(origin.replace(/\/$/, ""))) return cb(null, true);
+      // Name the rejected origin: the browser only reports the mismatch, which
+      // makes this the single hardest CORS failure to diagnose from the client.
+      console.warn(`[CORS] blocked origin: ${origin}`);
+      return cb(new Error(`Origin not allowed by CORS: ${origin}`));
+    },
+    credentials: true,
+  })
+);
 
 app.use(cookieParser());
 app.use(express.json());
@@ -42,6 +83,9 @@ app.use(express.urlencoded({ extended: true }));
 app.use("/api/mail", mailRoutes);
 app.use("/api/resume", resumeRouter);
 app.use("/api/interview", interviewRoutes);
+// Previous year questions + the course request form for exams not covered yet.
+// Mounted before testRoutes because testRoutes owns the bare "/api" prefix.
+app.use("/api/pyq", pyqRoutes);
 app.use("/api", testRoutes);
 app.use("/api/category", categoryRoutes);
 app.use("/api/cate_topics", topicRoutes);

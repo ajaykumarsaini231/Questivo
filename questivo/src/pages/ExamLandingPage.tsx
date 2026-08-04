@@ -1,8 +1,15 @@
-import React from "react";
+import React, { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ChevronRight, CheckCircle, Target, Sparkles } from "lucide-react";
+import { ChevronRight, CheckCircle, Target, Sparkles, Send } from "lucide-react";
 import { EXAMS, getExam, examPath } from "../lib/exams";
 import { getPaper, questionTypeLabel } from "../lib/examSyllabus";
+import { PYQ_SLUGS } from "../lib/pyq";
+// Eager on purpose. This page is prerendered, so the PYQ heading and the AI
+// button end up in the static HTML — no layout shift at the very top of the
+// page, and the block is indexable. The expensive part (katex + markdown) is
+// lazy INSIDE PyqSection, so nothing heavy joins the first paint.
+import PyqSection from "../componenets/PyqSection";
+import CourseRequestModal from "../componenets/CourseRequestModal";
 
 /**
  * Per-exam landing page.
@@ -16,34 +23,82 @@ const ExamLandingPage: React.FC = () => {
   const { slug } = useParams();
   const navigate = useNavigate();
   const exam = getExam(slug);
+  // Declared before the not-found branch below: hooks must run in the same
+  // order on every render, so they cannot sit after an early return.
+  const [requestOpen, setRequestOpen] = useState(false);
+  // -1 until PyqSection reports back. Starting at -1 rather than 0 keeps the
+  // prerendered markup and the first hydration pass identical: neither CTA
+  // claims a free paper exists before anything has been counted.
+  const [pyqCount, setPyqCount] = useState(-1);
+  const hasPyqBank = pyqCount > 0;
 
   if (!exam) {
+    // A visitor who landed here typed or followed a URL for an exam we do not
+    // cover — the single best moment to ask them which one they wanted, so the
+    // request form goes here rather than only in a footer somewhere.
+    const guess = (slug || "")
+      .replace(/[-_]+/g, " ")
+      .replace(/\b\w/g, (c) => c.toUpperCase())
+      .trim();
+
     return (
       <div className="min-h-screen bg-slate-50">
-        <div className="shell py-20 text-center">
-          <h1 className="text-3xl font-bold text-slate-900">Exam not found</h1>
-          <p className="mt-4 text-slate-600">
-            We don't have a mock test page for that exam yet.
+        <main className="shell py-16">
+          <h1 className="text-3xl font-bold text-slate-900">
+            We don't cover that exam yet
+          </h1>
+          <p className="mt-3 text-slate-600">
+            Questivo has mock tests for the six exams below. If yours isn't one of them,
+            request it and we'll build it.
           </p>
-          <div className="mt-8 flex flex-wrap justify-center gap-3">
+
+          <div className="mt-6 flex flex-wrap gap-3">
             {EXAMS.map((e) => (
-              <Link
-                key={e.slug}
-                to={examPath(e)}
-                className="btn btn-secondary btn-sm"
-              >
+              <Link key={e.slug} to={examPath(e)} className="btn btn-secondary btn-sm">
                 {e.shortName}
               </Link>
             ))}
           </div>
-        </div>
+
+          <button onClick={() => setRequestOpen(true)} className="btn btn-primary mt-8">
+            <Send className="h-4 w-4" />
+            Request {guess || "this course"}
+          </button>
+
+          <CourseRequestModal
+            open={requestOpen}
+            onClose={() => setRequestOpen(false)}
+            prefill={guess}
+          />
+        </main>
       </div>
     );
   }
 
-  const start = () => navigate("/GenerateTestPage", { state: { selectedExam: exam.code } });
+  // Two ways into the generator, and the distinction is money: a PYQ paper is
+  // assembled from stored questions for nothing, while an AI paper spends model
+  // credits on every generation. The mode travels in router state so the page
+  // opens on the right one instead of the visitor having to find the selector.
+  const start = () =>
+    navigate("/GenerateTestPage", { state: { selectedExam: exam.code, mode: "practice" } });
+  const startPyq = () =>
+    navigate("/GenerateTestPage", { state: { selectedExam: exam.code, mode: "pyq" } });
+  // A chapter-scoped generation. Carrying the chapter through as a preselected
+  // topic means the generator narrows to it instead of the candidate having to
+  // find it again in a list of twenty on the next screen.
+  const startChapter = (topic: string) =>
+    navigate("/GenerateTestPage", {
+      state: { selectedExam: exam.code, mode: "practice", topics: [topic] },
+    });
   const others = EXAMS.filter((e) => e.slug !== exam.slug);
   const paper = getPaper(exam.slug);
+  // Every exam leads with the real paper, not just the three with a stocked
+  // shelf. Exams we hold questions for resolve to their PYQ bucket; the rest
+  // pass their own code, which the API answers with a 404 that PyqSection
+  // renders as "being added" alongside the AI paper CTA. Previously these
+  // three exams had no PYQ block at all, so half the catalogue jumped straight
+  // to the generated paper and the ordering promise only held on paper.
+  const pyqExamCode = PYQ_SLUGS[exam.slug] ?? exam.code;
   const fmtMarks = (c: number, w: number) =>
     w === 0 ? `+${c}, no negative` : `+${c} / ${w}`;
 
@@ -72,18 +127,44 @@ const ExamLandingPage: React.FC = () => {
           </h1>
           <p className="mt-6 text-lg leading-relaxed text-slate-600">{exam.summary}</p>
           <p className="mt-4 text-lg leading-relaxed text-slate-600">
-            Questivo generates unlimited {exam.shortName} practice papers that follow the
-            official exam pattern, scores them instantly with negative marking, and explains
-            the reasoning behind every answer.
+            {hasPyqBank
+              ? `Practise ${pyqCount} real ${exam.shortName} questions from past papers, each with a worked solution — or generate an unlimited fresh paper in the official exam pattern, scored instantly with negative marking.`
+              : `Questivo generates unlimited ${exam.shortName} practice papers that follow the official exam pattern, scores them instantly with negative marking, and explains the reasoning behind every answer.`}
           </p>
-          <button
-            onClick={start}
-            className="btn btn-primary btn-lg mt-8"
-          >
-            Generate a free {exam.shortName} mock test
-            <ChevronRight className="ml-2 h-4 w-4" />
-          </button>
+          {/* Once real questions exist for this exam they are the better paper
+              AND the free one, so the hero stops advertising generation. The AI
+              route stays available from the section below when someone wants a
+              fresh paper on a specific topic. */}
+          {hasPyqBank ? (
+            <div className="mt-8 flex flex-wrap items-center gap-3">
+              <button onClick={startPyq} className="btn btn-primary btn-lg">
+                Start a free {exam.shortName} PYQ mock test
+                <ChevronRight className="ml-2 h-4 w-4" />
+              </button>
+              <a href="#pyq" className="btn btn-secondary btn-lg">
+                Browse {pyqCount} previous year questions
+              </a>
+            </div>
+          ) : (
+            <button onClick={start} className="btn btn-primary btn-lg mt-8">
+              Generate a free {exam.shortName} mock test
+              <ChevronRight className="ml-2 h-4 w-4" />
+            </button>
+          )}
         </header>
+
+        {/* ============ PREVIOUS YEAR QUESTIONS ============
+            Positioned directly under the hero, ahead of every explanatory
+            section: a candidate who came here to practise should hit the real
+            paper before they hit prose about it. */}
+        <PyqSection
+          examCode={pyqExamCode}
+          examShortName={exam.shortName}
+          onGenerate={start}
+          onPyqTest={startPyq}
+          onGenerateChapter={startChapter}
+          onCount={setPyqCount}
+        />
 
         <section className="mt-16">
           <h2 className="section-title">
@@ -376,19 +457,35 @@ const ExamLandingPage: React.FC = () => {
           </div>
         </section>
 
+        {/* ============ COURSE REQUEST ============
+            Every exam page is a place someone may have arrived while looking
+            for a different exam, so the ask sits on all of them rather than on
+            a page nobody navigates to. */}
+        <section className="mt-16" id="request-a-course">
+          <h2 className="section-title">Preparing for a different exam?</h2>
+          <p className="mt-3 leading-relaxed text-slate-600">
+            Questivo covers {EXAMS.length} exams today. Tell us which one you need and we
+            will add it — requests are prioritised by how many people ask for the same exam.
+          </p>
+          <button onClick={() => setRequestOpen(true)} className="btn btn-secondary mt-6">
+            <Send className="h-4 w-4" />
+            Request a course
+          </button>
+        </section>
+
+        <CourseRequestModal open={requestOpen} onClose={() => setRequestOpen(false)} />
+
         <aside className="mt-16 rounded-[10px] bg-slate-900 p-8 text-center">
           <Sparkles className="mx-auto h-6 w-6 text-indigo-400" />
           <p className="mt-3 text-xl font-bold text-white">
             Ready to attempt a {exam.shortName} paper?
           </p>
           <p className="mx-auto mt-2 max-w-lg muted">
-            Generating and attempting mock tests on Questivo is free. No payment details
-            required.
+            {hasPyqBank
+              ? `${pyqCount} real ${exam.shortName} questions are stored, with a worked solution on each. Free, no payment details required.`
+              : "Generating and attempting mock tests on Questivo is free. No payment details required."}
           </p>
-          <button
-            onClick={start}
-            className="btn btn-primary btn-lg mt-6"
-          >
+          <button onClick={hasPyqBank ? startPyq : start} className="btn btn-primary btn-lg mt-6">
             Start now <ChevronRight className="h-4 w-4" />
           </button>
         </aside>

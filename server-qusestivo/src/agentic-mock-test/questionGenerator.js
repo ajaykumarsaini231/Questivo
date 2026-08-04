@@ -11,6 +11,12 @@ import {
 import { topicsForSubject, allTopics } from "./examSyllabus.js";
 import { sanitizeSvg } from "../lib/sanitizeSvg.js";
 import { findDiagramInDrive } from "../lib/driveDiagrams.js";
+import {
+  profileToBrief,
+  profileToSectionBrief,
+  pyqTopicsForSubject,
+} from "../lib/pyqPattern.js";
+import { getCachedPyqProfile } from "../lib/pyqProfile.js";
 
 const NEWLINE = String.fromCharCode(10);
 
@@ -59,6 +65,12 @@ export async function generateQuestionsAgent({
     `[Groq] Generating Questions (Token Saver Mode). Target: ${totalTarget}`
   );
 
+  // Previous-year weighting for an unrestricted practice set. Skipped when the
+  // caller picked specific topics: they asked for Thermodynamics, so a table
+  // telling the model to favour Mechanics would override their own choice.
+  const pyqBrief =
+    topics?.length > 0 ? null : profileToBrief(await getCachedPyqProfile(examType));
+
   let allQuestions = [];
   let loopCount = 0;
   const MAX_LOOPS = MAX_TOTAL_RETRIES + 5;
@@ -78,6 +90,7 @@ export async function generateQuestionsAgent({
         difficulty,
         medium,
         totalTarget,
+        pyqBrief,
       });
 
       const uniqueBatch = deduplicateAgainstList(batchQuestions, allQuestions);
@@ -141,13 +154,30 @@ async function generateFullPaper({ examType, plan, difficulty, medium, topics })
 
   const collected = [];
 
+  // Real previous-year distribution for this exam, if we hold any. One query
+  // for the whole paper (cached), NOT one per section — and the PYQs
+  // themselves never enter a prompt, only their frequency table does.
+  const pyqProfile = await getCachedPyqProfile(examType);
+  if (pyqProfile) {
+    console.log(
+      `[Paper] weighting by ${pyqProfile.sampled} previous-year questions ` +
+        `(${pyqProfile.yearsCovered.at(-1)}-${pyqProfile.yearsCovered[0]})`
+    );
+  }
+
   for (const block of plan.blocks) {
     // Topics come from the section's own subject, so a Physics section cannot
     // quietly fill itself with Chemistry.
     const subject = block.subjects?.[0];
+    // Prefer topics ranked by how often they actually appear in real papers.
+    // This both shortens the prompt and stops the model sampling the syllabus
+    // uniformly when the examiner never has.
+    const rankedTopics = pyqTopicsForSubject(pyqProfile, subject);
     let blockTopics =
-      (subject && topicsForSubject(plan.key, subject)) || allTopics(plan.key) || [];
+      rankedTopics || (subject && topicsForSubject(plan.key, subject)) || allTopics(plan.key) || [];
     if (!blockTopics.length) blockTopics = topics?.length ? topics : [subject || "General"];
+
+    const pyqBrief = profileToSectionBrief(pyqProfile, subject);
 
     let got = 0;
     let attempts = 0;
@@ -162,6 +192,7 @@ async function generateFullPaper({ examType, plan, difficulty, medium, topics })
           medium,
           totalTarget: plan.totalQuestions,
           section: block,
+          pyqBrief,
         });
         const unique = deduplicateAgainstList(batch, collected);
         // Tag every question with the section it belongs to so the UI and the
@@ -323,6 +354,7 @@ async function fetchBatchFromGroq({
   medium,
   totalTarget,
   section,
+  pyqBrief,
 }) {
   // 🔥 COMPRESSED PROMPT (Saves ~40% Tokens)
   // We removed lengthy examples but kept strict rules.
@@ -338,7 +370,7 @@ async function fetchBatchFromGroq({
   const optionless = type === "numerical" || type === "integer";
 
   const systemPrompt = `ACT: Chief Examiner (${examType}). GOAL: Create ${count} TOUGH, multi-step questions. TOPICS: ${topics.join(", ")}. LEVEL: ${difficulty}.
-${patternBrief ? `\n${patternBrief}\n` : ""}${sectionBrief ? `\n${sectionBrief}\n` : ""}
+${patternBrief ? `\n${patternBrief}\n` : ""}${sectionBrief ? `\n${sectionBrief}\n` : ""}${pyqBrief ? `\n${pyqBrief}\n` : ""}
 ⛔ STRICT RULES:
 1. Every math symbol, constant, matrix, or variable (x, y, n, a_n, M, R) MUST be enclosed in delimiters.
 2. INLINE expressions: Use \\( ... \\). (e.g. \\( f(x)=x^2 \\), \\( \\vec{a}=\\langle 2,3 \\rangle \\)).

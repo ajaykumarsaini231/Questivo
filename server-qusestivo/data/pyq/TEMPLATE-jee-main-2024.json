@@ -1,0 +1,56 @@
+{
+  "_readme": [
+    "TEMPLATE ONLY — these are illustrative questions written for this file, not",
+    "real previous year questions. Delete this file before importing real data.",
+    "",
+    "Import it with:",
+    "  node scripts/importPyq.mjs --file data/pyq/TEMPLATE-jee-main-2024.json \\",
+    "       --exam JEE_MAIN --year 2024 --source \"<where these came from>\" --dry-run",
+    "",
+    "Drop --dry-run to actually write. Re-running the same file is safe: rows are",
+    "upserted on a hash of the question text, so nothing duplicates.",
+    "",
+    "'topic' is the field the AI paper generator learns from. A question with no",
+    "topic still shows in the PYQ list but contributes nothing to the pattern, so",
+    "fill it in with the same topic names your syllabus uses."
+  ],
+  "questions": [
+    {
+      "subject": "Physics",
+      "topic": "Rotational Motion",
+      "questionText": "A solid sphere of mass \\( M \\) and radius \\( R \\) rolls without slipping down an incline of angle \\( \\theta \\). What is the acceleration of its centre of mass?",
+      "optionA": "\\( g\\sin\\theta \\)",
+      "optionB": "\\( \\frac{5}{7} g\\sin\\theta \\)",
+      "optionC": "\\( \\frac{2}{3} g\\sin\\theta \\)",
+      "optionD": "\\( \\frac{1}{2} g\\sin\\theta \\)",
+      "correctAnswer": "B",
+      "questionType": "mcq_single",
+      "marksCorrect": 4,
+      "marksIncorrect": -1,
+      "solution": "For a rolling solid sphere \\( I = \\tfrac{2}{5}MR^2 \\), so \\( a = \\frac{g\\sin\\theta}{1 + I/MR^2} = \\frac{5}{7}g\\sin\\theta \\)."
+    },
+    {
+      "subject": "Chemistry",
+      "topic": "Chemical Kinetics",
+      "questionText": "The half-life of a first order reaction is 30 minutes. What fraction of the reactant remains after 90 minutes?",
+      "optionA": "1/2",
+      "optionB": "1/4",
+      "optionC": "1/8",
+      "optionD": "1/16",
+      "correctAnswer": "C",
+      "questionType": "mcq_single",
+      "marksCorrect": 4,
+      "marksIncorrect": -1
+    },
+    {
+      "subject": "Mathematics",
+      "topic": "Definite Integrals",
+      "questionText": "Evaluate \\( \\int_{0}^{1} \\frac{2x}{1+x^2}\\,dx \\). Give your answer to two decimal places.",
+      "correctAnswer": "0.69",
+      "questionType": "numerical",
+      "marksCorrect": 4,
+      "marksIncorrect": -1,
+      "solution": "The integral is \\( \\ln(1+x^2) \\big|_0^1 = \\ln 2 \\approx 0.69 \\)."
+    }
+  ]
+}

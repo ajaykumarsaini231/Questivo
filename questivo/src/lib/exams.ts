@@ -97,6 +97,53 @@ export const EXAMS: Exam[] = [
     ],
   },
   {
+    // Kept as its own exam rather than folded into JEE Main. They share a
+    // syllabus and nothing else: Advanced uses multiple-correct options,
+    // matching lists and integer answers, and changes its marking scheme
+    // between years. src/lib/pyqPattern.js draws the same line server-side —
+    // an Advanced candidate served Main history would be practising the wrong
+    // paper. No pattern table is declared for it below for the same reason:
+    // the scheme moves year to year and this file does not publish numbers it
+    // cannot stand behind.
+    slug: "jee-advanced",
+    name: "JEE Advanced",
+    shortName: "JEE Advanced",
+    code: "JEE_ADVANCED",
+    category: "Engineering",
+    aliases: ["IIT JEE", "JEE Advanced exam", "Joint Entrance Examination Advanced"],
+    summary:
+      "JEE Advanced is the entrance examination for admission to the Indian Institutes of Technology, conducted each year by one of the zonal IITs under the Joint Admission Board, and taken by candidates who have first qualified through JEE Main.",
+    audience:
+      "Candidates who have qualified JEE Main and are targeting admission to the IITs.",
+    subjects: ["Physics", "Chemistry", "Mathematics"],
+    whyPractice:
+      "JEE Advanced does not reward recall. Its questions combine several ideas at once and deliberately vary their format between years, so the skill being tested is reading an unfamiliar problem and deciding how to start. That only develops by attempting hard problems and reviewing the approach afterwards, which is why previous year papers matter more here than for any other exam on this site.",
+    commonMistakes: [
+      "Preparing for it as though it were JEE Main. Main rewards clean execution on standard questions; Advanced rewards working out where to begin on a problem you have not seen before.",
+      "Ignoring the question type. Multiple-correct questions carry partial credit and negative marking together, so a half-remembered option is far more expensive than it looks.",
+      "Assuming the marking scheme is fixed. It has changed between years, and strategies built around one year's rules can cost marks under another's.",
+      "Practising only the questions you can already start. The ones you stall on are the entire point of the paper.",
+    ],
+    faqs: [
+      {
+        q: "Are Questivo's JEE Advanced practice questions free?",
+        a: "Yes. Previous year JEE Advanced questions on Questivo are free to browse and attempt, and no payment details are required.",
+      },
+      {
+        q: "Where do Questivo's JEE Advanced previous year questions come from?",
+        a: "They come from an openly licensed dataset, and every question stores the source it was imported from, which is shown alongside it on the question card.",
+      },
+      {
+        q: "Can I practise JEE Advanced Physics, Chemistry or Mathematics separately?",
+        a: "Yes. Previous year questions can be filtered by subject and by year, and a generated practice paper can be restricted to a single subject or topic.",
+      },
+      {
+        q: "Is JEE Advanced the same paper as JEE Main?",
+        a: "No. They share a syllabus but differ in difficulty, question formats and marking. Questivo keeps their question banks separate, so JEE Advanced practice never draws on JEE Main questions.",
+      },
+    ],
+  },
+  {
     slug: "neet-ug",
     name: "NEET UG",
     shortName: "NEET UG",

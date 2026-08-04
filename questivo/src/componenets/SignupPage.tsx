@@ -3,7 +3,7 @@ import type { ChangeEvent, FormEvent } from "react";
 
 import axios from "axios";
 import toast, { Toaster } from "react-hot-toast";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { FcGoogle } from "react-icons/fc";
 // import { FaFacebook } from "react-icons/fa";
 import { motion } from "framer-motion";
@@ -47,6 +47,27 @@ const api = axios.create({
 
 const Signup = () => {
   const navigate = useNavigate();
+  const location = useLocation();
+
+  /**
+   * Where to send the visitor once they are authenticated.
+   *
+   * The homepage sends a logged-out visitor here with the exam they clicked
+   * (`{ redirectTo, selectedExam }`), but this screen always navigated to "/"
+   * and dropped both — so signing up to take a JEE paper landed you on the
+   * homepage with nothing selected, and the exam had to be found again.
+   */
+  const authState = location.state as
+    | { redirectTo?: string; selectedExam?: string }
+    | null;
+
+  const goAfterAuth = (replace = true) => {
+    const to = authState?.redirectTo || "/";
+    navigate(to, {
+      replace,
+      state: authState?.selectedExam ? { selectedExam: authState.selectedExam } : undefined,
+    });
+  };
 
   // --- STATE MANAGEMENT ---
   const [variant, setVariant] = useState<Variant>("LOGIN");
@@ -69,7 +90,7 @@ const Signup = () => {
       try {
         const res = await api.get("/api/auth/me");
         if (mounted && res.data?.user) {
-          navigate("/", { replace: true });
+          goAfterAuth();
         }
       } catch {
         // Not logged in
@@ -217,7 +238,7 @@ const Signup = () => {
   // --- FINALIZATION ---
   const finalizeAuth = () => {
     toast.success("Welcome!");
-    setTimeout(() => navigate("/", { replace: true }), 500);
+    setTimeout(() => goAfterAuth(), 500);
   };
 
   // --- FORM SUBMISSION ---

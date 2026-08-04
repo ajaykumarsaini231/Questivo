@@ -1,4 +1,4 @@
-import { Suspense, lazy } from "react";
+import { Suspense, lazy, useRef } from "react";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -17,19 +17,33 @@ import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-route
 // --- Eager: prerendered routes + chrome ---
 import Header from "./componenets/Header";
 import Seo from "./componenets/Seo";
+// Track selection wraps every route, so all three stay eager. AudienceGate
+// renders nothing at all until the stored choice has been read, which keeps it
+// out of the prerendered markup.
+import { AudienceProvider, useAudience } from "./componenets/AudienceProvider";
+import AudienceGate from "./componenets/AudienceGate";
+import FeatureGate from "./componenets/FeatureGate";
 import HomePage from "./componenets/HomePage";
 import GenerateTestPage from "./componenets/selectpage";
 import ResumeATSPage from "./pages/Resume_score";
 import ExamLandingPage from "./pages/ExamLandingPage";
+import ExamsIndexPage from "./pages/ExamsIndexPage";
 import NotFoundPage from "./pages/NotFoundPage";
 
 // --- Lazy: never prerendered, and these carry the heavy dependencies ---
 // katex + react-markdown (~250 kB) live behind the test runner and result pages.
 const TestRunner = lazy(() => import("./componenets/TestPage"));
 const ResultPage = lazy(() => import("./componenets/result"));
+// Previous year papers: the picker, and the NTA-style player that runs one.
+// Never prerendered — the picker's content is a live query and the player is
+// only ever reached by a signed-in candidate choosing a paper.
+const PyqPapersPage = lazy(() => import("./pages/PyqPapersPage"));
+const PyqPaperRunner = lazy(() => import("./pages/PyqPaperRunner"));
 // react-icons is only used by the auth screen.
 const Signup = lazy(() => import("./componenets/SignupPage"));
 const ProfilePage = lazy(() => import("./componenets/ProfilePage"));
+// Saved ATS reports + interview transcripts. Private, so never prerendered.
+const MyReportsPage = lazy(() => import("./pages/MyReportsPage"));
 // socket.io-client only matters here.
 const LiveInterviewPage = lazy(() =>
   import("./pages/LiveInterviewPage").then((m) => ({ default: m.LiveInterviewPage }))
@@ -72,6 +86,36 @@ function RouteFallback() {
   );
 }
 
+/**
+ * Entry point for /interviews, which mints a session id and redirects.
+ *
+ * It cannot simply be a gated <Navigate>: the gate needs the stored track
+ * before it can decide anything, and a bare <Navigate> would have already
+ * redirected during that first render. So this waits for `ready`, then either
+ * shows the gate or performs the redirect.
+ *
+ * The session id is generated in a ref rather than inline in the route element,
+ * where it was recomputed on every render of the tree.
+ */
+function InterviewEntry() {
+  const { ready, can } = useAudience();
+  const sessionId = useRef<string | null>(null);
+  if (!sessionId.current) {
+    sessionId.current = `session-${Math.random().toString(36).substring(2, 9)}`;
+  }
+
+  if (!ready) return <RouteFallback />;
+
+  const redirect = <Navigate to={`/interviews/${sessionId.current}`} replace />;
+  if (can("aiInterview")) return redirect;
+
+  return (
+    <FeatureGate feature="aiInterview" title="AI interview studio">
+      {redirect}
+    </FeatureGate>
+  );
+}
+
 /* ================= APP CONTENT ================= */
 // Exported so the prerender script can mount the same tree inside a
 // StaticRouter without pulling in BrowserRouter.
@@ -90,15 +134,40 @@ export function AppContent() {
     <>
       <Seo />
       {!hideHeader && <Header />}
+      {/* Suppressed wherever the header is: a full-screen question has no place
+          in front of an auth screen, a running test or the admin console. */}
+      {!hideHeader && <AudienceGate />}
 
       <Suspense fallback={<RouteFallback />}>
       <Routes>
         {/* ================= PUBLIC ROUTES ================= */}
         <Route path="/" element={<HomePage />} />
+        {/* Still live, just no longer promoted in the nav — it is the second
+            option under "Generate a paper" on the previous year papers page.
+            See lib/featureFlags.ts. */}
         <Route path="/GenerateTestPage" element={<GenerateTestPage />} />
         <Route path="/profile" element={<ProfilePage />} />
-        <Route path="/resume_ats_score" element={<ResumeATSPage />} />
+        <Route path="/my-reports" element={<MyReportsPage />} />
+        {/* Career tools are gated by track rather than removed from the router:
+            the gate explains itself and still lets a determined visitor
+            through. See FeatureGate for why a 404 would be the wrong answer. */}
+        <Route
+          path="/resume_ats_score"
+          element={
+            <FeatureGate feature="resumeAts" title="ATS resume checker">
+              <ResumeATSPage />
+            </FeatureGate>
+          }
+        />
+        <Route path="/exams" element={<ExamsIndexPage />} />
         <Route path="/mock-test/:slug" element={<ExamLandingPage />} />
+
+        {/* ================= PREVIOUS YEAR PAPERS =================
+            Separate from the generator flow above on purpose. A PYQ is one
+            specific paper sat on one specific day, so the only thing the
+            candidate chooses is which — never topics, count or difficulty. */}
+        <Route path="/pyq" element={<PyqPapersPage />} />
+        <Route path="/pyq/:paperId" element={<PyqPaperRunner />} />
 
         {/* ================= AUTH ROUTES ================= */}
         <Route path="/signin" element={<Signup />} />
@@ -111,7 +180,7 @@ export function AppContent() {
         {/* Dynamic Route mapping */}
 <Route path="/interviews/:sessionId" element={<LiveInterviewPage />} />
 
-<Route path="/interviews" element={<Navigate to={`/interviews/session-${Math.random().toString(36).substring(2, 9)}`} replace />} />
+<Route path="/interviews" element={<InterviewEntry />} />
 
         {/* ================= PROTECTED ADMIN ROUTES ================= */}
         <Route element={<AdminRequireAuth />}>
@@ -148,7 +217,9 @@ export function AppContent() {
 export default function App() {
   return (
     <BrowserRouter>
-      <AppContent />
+      <AudienceProvider>
+        <AppContent />
+      </AudienceProvider>
     </BrowserRouter>
   );
 }

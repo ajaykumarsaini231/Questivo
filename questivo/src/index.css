@@ -123,6 +123,38 @@
     border-color: var(--c-border-strong);
   }
 
+  /* ---------- Modal ----------
+     Built on the native <dialog> element, which gives focus trapping, Escape
+     to close and top-layer stacking for free. Top layer also means the modal
+     escapes any transformed or overflow-hidden ancestor, which is what breaks
+     hand-rolled z-index modals inside cards and sticky headers. */
+  .modal {
+    background: var(--c-surface);
+    border: 1px solid var(--c-border);
+    border-radius: var(--r-card);
+    box-shadow: 0 20px 48px rgba(16, 24, 40, .18);
+    padding: 0;
+    width: min(640px, calc(100vw - 32px));
+    max-height: calc(100dvh - 48px);
+    overflow: auto;
+    margin: auto;
+    color: var(--c-text);
+  }
+  .modal::backdrop {
+    background: rgba(16, 24, 40, .55);
+    backdrop-filter: blur(2px);
+  }
+  /* Entry animation, skipped for anyone who asked not to see motion. */
+  @media (prefers-reduced-motion: no-preference) {
+    .modal[open] { animation: modal-in .16s ease-out; }
+    .modal[open]::backdrop { animation: backdrop-in .16s ease-out; }
+  }
+  @keyframes modal-in {
+    from { opacity: 0; transform: translateY(8px) scale(.985); }
+    to   { opacity: 1; transform: none; }
+  }
+  @keyframes backdrop-in { from { opacity: 0 } to { opacity: 1 } }
+
   /* ---------- Chips / tags ---------- */
   .chip {
     @apply inline-flex items-center font-medium;
@@ -178,6 +210,45 @@
   }
   @media (min-width: 768px) {
     .shell { padding-inline: 32px; }
+  }
+
+  /* ---------- Print / PDF export ----------
+     Reports export via the browser's own print pipeline (window.print), not a
+     JS PDF library. html2canvas + jsPDF rasterise the DOM: ~300KB of extra
+     bundle, seconds of work on a long report, and the result is a blurry image
+     with unselectable text. Native print is effectively instant, adds nothing
+     to the bundle, keeps text selectable and searchable, and every browser's
+     print dialog already offers "Save as PDF".
+
+     The rules below strip the app chrome so the printed page is just the
+     report. */
+  .print-hide { }
+
+  @media print {
+    /* Only the report survives. */
+    header, footer, nav, .print-hide { display: none !important; }
+
+    body { background: #fff; }
+
+    .shell { max-width: none; padding: 0; }
+
+    /* Flat surfaces print better than shadows, and save toner. */
+    .card {
+      box-shadow: none !important;
+      border: 1px solid #d4d4d8 !important;
+      break-inside: avoid;
+    }
+
+    /* Never split a heading from the content it introduces, or a Q&A block. */
+    h1, h2, h3 { break-after: avoid-page; }
+    section, article > div, li { break-inside: avoid; }
+
+    /* Force colour scores/labels to actually print. */
+    * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+    a[href]::after { content: ""; }
+
+    @page { margin: 14mm; }
   }
 
   /* ---------- Hero ----------

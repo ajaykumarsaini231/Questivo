@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
   Menu,
   X,
@@ -10,8 +10,12 @@ import {
   BookOpen,
   Layers,
   User,
+  SlidersHorizontal,
 } from "lucide-react";
 import axios from "axios";
+import { useAudience } from "./AudienceProvider";
+import type { FeatureId } from "../lib/audience";
+import { SHOW_AI_GENERATOR } from "../lib/featureFlags";
 /* ================= TYPES ================= */
 
 interface User {
@@ -31,6 +35,48 @@ const api = axios.create({
   withCredentials: true,
 });
 
+/* ================= NAV ================= */
+
+type NavLink = {
+  label: string;
+  href: string;
+  /** Homepage section anchor rather than its own route. */
+  hash?: string;
+  /** Also treat these path prefixes as this link being current. */
+  match?: string[];
+  /** Hidden unless the visitor's track includes this feature. Links with no
+   *  feature are core navigation and are shown to everyone. */
+  feature?: FeatureId;
+};
+
+const NAV_LINKS: NavLink[] = [
+  // A real route, not a homepage anchor: this is the exam directory, and it
+  // stays highlighted while the visitor is on any individual exam page.
+  { label: "Exam Categories", href: "/exams", match: ["/mock-test"] },
+  { label: "How it Works", href: "/#features", hash: "#features" },
+  // The archive, not the generator: a candidate looking for "previous year
+  // questions" wants a specific paper, not a paper assembled to a spec.
+  { label: "Previous Year Papers", href: "/pyq", feature: "pyq" },
+  // Retired behind a flag rather than deleted — see lib/featureFlags.ts.
+  ...(SHOW_AI_GENERATOR ? [{ label: "Generate Test", href: "/GenerateTestPage" }] : []),
+  { label: "Resume ATS Score", href: "/resume_ats_score", feature: "resumeAts" },
+  { label: "AI Interview Studio", href: "/interviews", feature: "aiInterview" },
+];
+
+/**
+ * Is this link the page the user is on?
+ *
+ * Section links are only current while actually on the homepage at that anchor;
+ * marking "Exam Categories" active on every page would make the indicator
+ * meaningless. Route links also match their sub-paths, so an exam detail page
+ * still highlights the section it belongs to.
+ */
+function isActive(link: NavLink, pathname: string, hash: string): boolean {
+  if (link.match?.some((p) => pathname.startsWith(p))) return true;
+  if (link.hash) return pathname === "/" && hash === link.hash;
+  return pathname === link.href || pathname.startsWith(link.href + "/");
+}
+
 /* ================= COMPONENT ================= */
 
 const Header: React.FC = () => {
@@ -39,6 +85,21 @@ const Header: React.FC = () => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
   const navigate = useNavigate();
+  // Drives the current-page indicator in the nav.
+  const { pathname, hash } = useLocation();
+
+  // Off-track tools drop out of the nav entirely. Before the stored choice has
+  // been read `can()` returns true for everything, so the prerendered header
+  // carries every link and no crawler sees a reduced menu.
+  const { can, audience, isAdmin, reopenChoice } = useAudience();
+  const navLinks = NAV_LINKS.filter((l) => !l.feature || can(l.feature));
+
+  const trackLabel =
+    isAdmin && !audience
+      ? "Admin view"
+      : isAdmin
+        ? `Preview: ${audience?.label}`
+        : (audience?.label ?? "");
 
   /* ===== AUTH CHECK (COOKIE → USER) ===== */
   // useEffect(() => {
@@ -118,40 +179,73 @@ const Header: React.FC = () => {
 
         {/* Desktop Nav */}
         <nav className="hidden md:flex items-center gap-6">
-          <a
-            href="/#exams"
-            className="text-sm text-slate-600 hover:text-indigo-600"
-          >
-            Exam Categories
-          </a>
-          <a
-            href="/#features"
-            className="text-sm text-slate-600 hover:text-indigo-600"
-          >
-            How it Works
-          </a>
-          <a
-            href="/GenerateTestPage"
-            className="text-sm text-slate-600 hover:text-indigo-600"
-          >
-            Generate Test
-          </a>
-          <a
-            href="/resume_ats_score"
-            className="text-sm text-slate-600 hover:text-indigo-600"
-          >
-            Resume ATS Score
-          </a>
-           <a
-            href="/interviews"
-            className="text-sm text-slate-600 hover:text-indigo-600"
-          >
-            AI Interview Studio
-          </a>
+          {navLinks.map((link) => {
+            const active = isActive(link, pathname, hash);
+            // Section links live on the homepage, so they stay <a> to let the
+            // browser handle the hash jump. Real routes use <Link>, which was
+            // the other bug here: plain <a href> forced a full page reload on
+            // every nav click, throwing away the SPA and re-downloading the app.
+            const cls = [
+              "relative text-sm transition-colors",
+              active
+                ? "font-semibold"
+                : "text-slate-600 hover:text-indigo-600",
+            ].join(" ");
+            const style = active ? { color: "var(--c-brand)" } : undefined;
+            const underline = active ? (
+              <span
+                aria-hidden="true"
+                className="absolute -bottom-[21px] left-0 h-[3px] w-full rounded-t"
+                style={{ background: "var(--c-brand)" }}
+              />
+            ) : null;
+
+            return link.hash ? (
+              <a
+                key={link.label}
+                href={link.href}
+                className={cls}
+                style={style}
+                aria-current={active ? "page" : undefined}
+              >
+                {link.label}
+                {underline}
+              </a>
+            ) : (
+              <Link
+                key={link.label}
+                to={link.href}
+                className={cls}
+                style={style}
+                aria-current={active ? "page" : undefined}
+              >
+                {link.label}
+                {underline}
+              </Link>
+            );
+          })}
         </nav>
 
         {/* Desktop Auth */}
         <div className="hidden md:flex items-center gap-4">
+          {/* The way back out of a track. A filter with no visible off switch
+              is indistinguishable from a broken site, so whichever narrowing
+              is in force says so and can be undone in one click. */}
+          {(audience || isAdmin) && (
+            <button
+              type="button"
+              onClick={reopenChoice}
+              className="hidden items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors hover:bg-slate-50 lg:inline-flex"
+              style={{ borderColor: "var(--c-border)", color: "var(--c-text-muted)" }}
+              // The icon carries "this is adjustable" on its own. A trailing
+              // "change" ran into the label and read as part of the track name.
+              title="Change what Questivo shows you"
+              aria-label={`Showing ${trackLabel}. Change what Questivo shows you`}
+            >
+              <SlidersHorizontal className="h-3.5 w-3.5 shrink-0" />
+              {trackLabel}
+            </button>
+          )}
           {user ? (
             <div className="flex items-center gap-3 pl-4 border-l">
               <div className="text-right hidden lg:block">
@@ -173,6 +267,13 @@ const Header: React.FC = () => {
                   />
                 </div>
               </div>
+
+              <Link
+                to="/my-reports"
+                className="hidden text-sm text-slate-600 hover:text-indigo-600 lg:block"
+              >
+                My reports
+              </Link>
 
               <button
                 onClick={handleLogout}
@@ -213,14 +314,14 @@ const Header: React.FC = () => {
           <div className="flex flex-col gap-2 p-4">
             {/* --- Navigation Links --- */}
             <div className="flex flex-col gap-1">
-              <a
-                href="/#exams"
+              <Link
+                to="/exams"
                 onClick={() => setIsMenuOpen(false)}
                 className="flex items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-slate-600 transition-colors hover:bg-indigo-50 hover:text-indigo-600"
               >
                 <Layers className="h-4 w-4" />
                 Exam Categories
-              </a>
+              </Link>
 
               <a
                 href="/#features"
@@ -230,30 +331,63 @@ const Header: React.FC = () => {
                 <BookOpen className="h-4 w-4" />
                 How it Works
               </a>
-              <a
-                href="/GenerateTestPage"
-                onClick={() => setIsMenuOpen(false)}
-                className="flex items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-slate-600 transition-colors hover:bg-indigo-50 hover:text-indigo-600"
-              >
-                <BookOpen className="h-4 w-4" />
-                Generate Test
-              </a>
-               <a
-                href="/resume_ats_score"
-                onClick={() => setIsMenuOpen(false)}
-                className="flex items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-slate-600 transition-colors hover:bg-indigo-50 hover:text-indigo-600"
-              >
-                <BookOpen className="h-4 w-4" />
-                Resume ATS Score
-              </a>
-               <a
-                href="/interviews"
-                onClick={() => setIsMenuOpen(false)}
-                className="flex items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-slate-600 transition-colors hover:bg-indigo-50 hover:text-indigo-600"
-              >
-                <BookOpen className="h-4 w-4" />
-                AI Interview Studio
-              </a>
+              {can("pyq") && (
+                <Link
+                  to="/pyq"
+                  onClick={() => setIsMenuOpen(false)}
+                  className="flex items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-slate-600 transition-colors hover:bg-indigo-50 hover:text-indigo-600"
+                >
+                  <Layers className="h-4 w-4" />
+                  Previous Year Papers
+                </Link>
+              )}
+              {SHOW_AI_GENERATOR && (
+                <a
+                  href="/GenerateTestPage"
+                  onClick={() => setIsMenuOpen(false)}
+                  className="flex items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-slate-600 transition-colors hover:bg-indigo-50 hover:text-indigo-600"
+                >
+                  <BookOpen className="h-4 w-4" />
+                  Generate Test
+                </a>
+              )}
+              {/* Same track filter as the desktop nav — the two menus must not
+                  disagree about what the site offers. */}
+              {can("resumeAts") && (
+                <Link
+                  to="/resume_ats_score"
+                  onClick={() => setIsMenuOpen(false)}
+                  className="flex items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-slate-600 transition-colors hover:bg-indigo-50 hover:text-indigo-600"
+                >
+                  <BookOpen className="h-4 w-4" />
+                  Resume ATS Score
+                </Link>
+              )}
+              {can("aiInterview") && (
+                <Link
+                  to="/interviews"
+                  onClick={() => setIsMenuOpen(false)}
+                  className="flex items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-slate-600 transition-colors hover:bg-indigo-50 hover:text-indigo-600"
+                >
+                  <BookOpen className="h-4 w-4" />
+                  AI Interview Studio
+                </Link>
+              )}
+
+              {(audience || isAdmin) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsMenuOpen(false);
+                    reopenChoice();
+                  }}
+                  className="mt-1 flex items-center gap-3 rounded-xl px-4 py-3 text-left text-sm font-medium text-indigo-600 transition-colors hover:bg-indigo-50"
+                >
+                  <Layers className="h-4 w-4" />
+                  Showing: {trackLabel}
+                  <span className="ml-auto text-xs underline opacity-70">Change</span>
+                </button>
+              )}
             </div>
 
             {/* --- Divider --- */}

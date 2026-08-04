@@ -27,6 +27,17 @@ const EXPERIENCE_LEVELS = ['Student', 'Intern', 'Fresher', '1–3 Years', '3–5
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:4000';
 
+/**
+ * WebSockets cannot go through the Vercel /api rewrite — a serverless edge
+ * rewrite terminates the request and never holds an upgraded connection open,
+ * so socket.io silently falls back and reconnects forever. REST is proxied so
+ * the auth cookie stays first-party; the socket instead dials the backend
+ * directly, which is fine because socket.io carries its own auth and does not
+ * depend on that cookie.
+ */
+const SOCKET_URL =
+  import.meta.env.VITE_SOCKET_URL || 'https://questivo.onrender.com';
+
 export const LiveInterviewPage = () => {
     const { sessionId } = useParams();
     const navigate = useNavigate();
@@ -326,7 +337,7 @@ export const LiveInterviewPage = () => {
             const targetSessionId = response.data?.sessionId || sessionId;
 
             // 🛠️ FIXED: Force direct native websockets tunnel connection safely on cloud infrastructure to eliminate 400 Bad Requests
-            socketRef.current = io(API, {
+            socketRef.current = io(SOCKET_URL, {
                 transports: ['websocket'],
                 upgrade: false,
                 reconnection: true,

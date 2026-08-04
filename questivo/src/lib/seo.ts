@@ -66,6 +66,25 @@ export const ROUTES: RouteSeo[] = [
     ],
   },
   {
+    // The directory page every "browse exams" affordance points at. It is the
+    // hub that links to all six exam pages, so it needs to be prerendered and
+    // indexable in its own right rather than being a client-only convenience.
+    path: "/exams",
+    title: "All Exams – Free Previous Year Questions & AI Mock Tests | Questivo",
+    description:
+      "Every exam Questivo covers: JEE Main, NEET UG, GATE MT, SSC CGL, RRB NTPC and UPSC IAS. Practise real previous year questions first, then generate unlimited fresh papers in the official exam pattern — free.",
+    keywords:
+      "all exams, previous year question papers, PYQ practice, free mock tests by exam, JEE NEET GATE SSC RRB UPSC previous year questions",
+    heading: "All exams on Questivo",
+    facts: [
+      "Questivo covers JEE Main, NEET UG, GATE Metallurgical Engineering, SSC CGL, RRB NTPC and UPSC IAS.",
+      "Each exam page opens with real previous year questions where Questivo has them.",
+      "Where no previous year questions are stored, Questivo generates a fresh paper in the official exam pattern instead.",
+      "Every previous year question can be expanded into a step-by-step worked solution.",
+      "Exams Questivo does not yet cover can be requested, and requests are prioritised by demand.",
+    ],
+  },
+  {
     path: "/resume_ats_score",
     title: "Free ATS Resume Checker & Score – Instant AI Audit | Questivo",
     description:
@@ -116,6 +135,15 @@ export const ROUTES: RouteSeo[] = [
     description: "Sign in to your Questivo account to continue practising.",
     keywords: "Questivo login, sign in",
     heading: "Sign in",
+    facts: [],
+    noindex: true,
+  },
+  {
+    path: "/my-reports",
+    title: "My Reports – Saved ATS Analyses & Interviews | Questivo",
+    description: "Reopen your past ATS resume reports and AI interview transcripts.",
+    keywords: "saved resume report, interview transcript history",
+    heading: "My reports",
     facts: [],
     noindex: true,
   },

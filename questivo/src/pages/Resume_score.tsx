@@ -168,17 +168,28 @@ export default function ResumeATSPage() {
     const navigate = useNavigate();
 
     // AUTH GUARD
+    //
+    // The `mounted` flag is not defensive tidiness — without it this redirects
+    // from a component that is no longer on screen. FeatureGate can unmount
+    // this page mid-request when the visitor's track does not include the ATS
+    // checker, and the in-flight /api/auth/me would then resolve and navigate
+    // to the signup screen, throwing away the gate that had just replaced it.
     useEffect(() => {
+        let mounted = true;
         const verifyUser = async () => {
             try {
                 await axios.get(`${API_BASE_URL}/api/auth/me`, { withCredentials: true });
-                setIsCheckingAuth(false);
+                if (mounted) setIsCheckingAuth(false);
             } catch (err) {
+                if (!mounted) return;
                 toast.error("Please login to access ATS Analyzer");
                 navigate("/signup");
             }
         };
         verifyUser();
+        return () => {
+            mounted = false;
+        };
     }, [navigate]);
 
     useEffect(() => {

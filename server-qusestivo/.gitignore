@@ -6,3 +6,14 @@ node_modules
 
 .vercel
 .env*
+
+# Runtime cache of images downloaded from Google Drive. Regenerated on demand.
+.cache/
+
+# Previous year question source files.
+#
+# These are papers you supply and may be licensed content you are permitted to
+# use but NOT to redistribute — pushing them to a public repository would
+# republish them. The format template is tracked; real papers are not.
+data/pyq/*
+!data/pyq/TEMPLATE-*.json

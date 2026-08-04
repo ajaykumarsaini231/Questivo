@@ -516,6 +516,13 @@ export const me = async (req, res) => {
           name: true,
           email: true,
           photoUrl: true,
+          // The caller's OWN role, which the UI needs to decide whether to show
+          // the admin view — a track-filtered visitor sees only their track,
+          // while an admin sees every exam and every tool. Safe to return: it
+          // tells a user what they already are, and every admin-only endpoint
+          // still checks the role server-side in adminIdentifier.js rather than
+          // trusting anything the client says about itself.
+          role: true,
         },
       });
     } catch (dbErr) {
@@ -579,7 +586,7 @@ export const getUserStats = async (req, res) => {
     // ... (Stats calculation logic same as before) ...
     const totalGenerated = sessions.length;
     const attemptedSessions = sessions.filter(s => s.answers.length > 0);
-    const totalAttempted = attemptedSessions.length;
+    let totalAttempted = attemptedSessions.length;
 
     let totalScoreSum = 0;
     let bestScore = 0;
@@ -605,13 +612,47 @@ export const getUserStats = async (req, res) => {
       };
     });
 
+    // Real papers sat through the PYQ player.
+    //
+    // These live in PyqAttempt, not TestSession — a real paper cannot be stored
+    // as a generated one (see the model's own note). Reading only TestSession
+    // here is why a candidate who had sat several papers still saw "0 tests
+    // attempted" and an empty history: the sittings existed, this endpoint just
+    // never looked at them.
+    const attempts = await prisma.pyqAttempt.findMany({
+      where: { userId },
+      orderBy: { createdAt: "desc" },
+      take: 20,
+    });
+
+    const attemptHistory = attempts.map((a) => ({
+      id: a.id,
+      examName: [a.examName, a.year, a.label].filter(Boolean).join(" · "),
+      date: a.createdAt,
+      score: a.percent,
+      totalQuestions: a.correct + a.wrong + a.unattempted,
+      difficulty: "Actual paper",
+      status: "Completed",
+      kind: "pyq",
+    }));
+
+    for (const a of attempts) {
+      totalAttempted += 1;
+      totalScoreSum += a.percent;
+      if (a.percent > bestScore) bestScore = a.percent;
+    }
+
     const averageScore = totalAttempted > 0 ? Math.round(totalScoreSum / totalAttempted) : 0;
+
+    const merged = [...history, ...attemptHistory].sort(
+      (x, y) => new Date(y.date).getTime() - new Date(x.date).getTime()
+    );
 
     res.json({
       success: true,
       user,
-      stats: { totalGenerated, totalAttempted, averageScore, bestScore },
-      history: history.slice(0, 10)
+      stats: { totalGenerated, totalAttempted, averageScore, bestScore, papersSat: attempts.length },
+      history: merged.slice(0, 10)
     });
 
   } catch (err) {

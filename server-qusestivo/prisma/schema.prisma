@@ -45,7 +45,8 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  sessions TestSession[]
+  sessions    TestSession[]
+  pyqAttempts PyqAttempt[]
 }
 
 model PendingUser {
@@ -80,6 +81,313 @@ model ExamTopic {
   isActive Boolean @default(true)
 
   questions TestQuestion[]
+}
+
+/// Previous year question, ingested from an official question paper.
+///
+/// Deliberately NOT populated by scraping. JEE/NEET/GATE papers are the
+/// copyright of NTA and the IITs, so the rows here must come from a source the
+/// operator is licensed to use — the official PDF they are permitted to
+/// republish, or questions they authored. `sourceUrl` records that provenance
+/// per question so it can always be traced.
+model PreviousYearQuestion {
+  id       String @id @default(uuid())
+  /// Exam family code, e.g. NTA_JEE_MAIN, NEET, GATE_ME.
+  examCode String
+  year     Int
+  /// Session/shift within a year, e.g. "Jan Shift 1". Optional.
+  session  String?
+  subject  String
+  topic    String?
+
+  // ─────────────────────── dashboard facets ───────────────────────
+  //
+  // The PYQ browser filters by exam → stream → year → session → date → shift →
+  // subject → chapter, the way candidates actually think about these papers
+  // ("26 June, shift 2, Chemistry"). `session` alone is a free-text string and
+  // cannot be filtered or sorted on, so each axis it packs is also stored
+  // discretely here. All nullable: rows imported before this existed, and rows
+  // from datasets that do not state a date, simply carry null and drop out of
+  // those filters instead of blocking the import.
+
+  /// "B.E./B.Tech" (Paper 1), "B.Arch", "B.Planning".
+  stream        String?
+  /// 1 or 2 for JEE Main's two attempts in a year.
+  sessionNumber Int?
+  /// "Session 1 (June)" — the human label for sessionNumber.
+  sessionLabel  String?
+  /// The exam date. Date, not DateTime: a paper happens on a day, and storing a
+  /// midnight timestamp makes every query timezone-dependent for no gain.
+  paperDate     DateTime? @db.Date
+  /// "24 Jun 2022".
+  dateLabel     String?
+  /// 1 = morning, 2 = evening.
+  shift         Int?
+  shiftLabel    String?
+  /// "9:00 AM – 12:00 PM".
+  shiftTime     String?
+  /// Groups every question of one shift. FK-free on purpose so a question can
+  /// be imported before its paper row exists.
+  paperId       String?
+
+  /// Syllabus chapter. Currently mirrors `topic`; kept separate because the
+  /// chapter filter is user-facing and the topic field also feeds the AI
+  /// pattern derivation, and those two will diverge.
+  chapter    String?
+  /// Slug of `chapter`, for stable filter URLs.
+  chapterId  String?
+  /// Slug of `subject`, same reason.
+  subjectId  String?
+
+  /// "A" (MCQ) or "B" (numerical) — JEE Main splits every subject this way.
+  section             String?
+  /// Position within the subject, 1-30.
+  questionNumber      Int?
+  /// Position within the whole paper, 1-90. What the NTA palette displays.
+  paperQuestionNumber Int?
+
+  questionText  String  @db.Text
+  optionA       String? @db.Text
+  optionB       String? @db.Text
+  optionC       String? @db.Text
+  optionD       String? @db.Text
+  /// "A" | "A,C" for multi-correct | a number for NAT/integer types.
+  ///
+  /// Nullable only for `status = "bonus"`: where the board voided a question
+  /// and awarded marks to every candidate there is no correct option, and
+  /// inventing one would teach the candidate a wrong answer.
+  correctAnswer String?
+  /// mcq_single | mcq_multiple | numerical | integer
+  questionType  String  @default("mcq_single")
+  marksCorrect  Float   @default(4)
+  marksIncorrect Float  @default(-1)
+
+  /// ok | needs_figure | bonus. Drives how the question card renders: a
+  /// needs_figure row shows its scan instead of its (incomplete) text, and a
+  /// bonus row shows "awarded to all" instead of an answer key.
+  status String @default("ok")
+
+  /// Worked explanation. Generated on demand and cached here, so the same
+  /// question is never explained twice — the main token saving in this feature.
+  solution      String? @db.Text
+  solutionModel String?
+  /// prose | symbolic | sparse. A coaching PDF typesets derivations as stacked
+  /// fractions and integral signs, which no text layer can linearise — those
+  /// extract as loose operators. Marking them lets the card fall back to
+  /// generating a solution on demand rather than showing a student the mess.
+  solutionQuality String?
+  /// Set when the source's own key disagreed with the board's. The board's key
+  /// is stored; this records that the answer was contested.
+  answerNote      String? @db.Text
+
+  /// Sanitized inline SVG or a data URI figure, same contract as TestQuestion.
+  diagramSvg String? @db.Text
+
+  // ───────────────────── figures sourced from Drive ─────────────────────
+  //
+  // Some official papers set their maths, match-the-column tables and graph
+  // options as vector outlines, so those parts have no text layer at all and
+  // the extracted stem comes out incomplete. The question, its key and its
+  // facets are still right, so the row is kept and flagged rather than
+  // discarded, and the operator's Drive folder supplies a scan of the original.
+  // src/lib/driveDiagrams.js already implements the lookup.
+
+  /// True when the text alone cannot be rendered — show the figure instead.
+  needsFigure  Boolean @default(false)
+  /// What driveDiagrams.js searches Drive for, e.g.
+  /// "JEE Main 2022 26 Jun 2022 Shift 2 Physics Q14".
+  figureHint   String?
+  /// The Drive image as a data URI, once found. Preferred over diagramSvg.
+  diagramImage String? @db.Text
+  /// "drive" when the figure came from Drive, else null.
+  diagramSource String?
+
+  // ──────────────── the question as it was printed, in parts ────────────────
+  //
+  // Cut straight out of the source page. Where the text layer cannot be
+  // recovered these ARE the question; where it can, they are still worth having
+  // as the authoritative rendering of what the candidate actually saw.
+  //
+  // Deliberately one image per part rather than one for the whole question. A
+  // single picture of stem-plus-options cannot be laid out beside radio
+  // buttons, shows four choices under a numerical question that has none, and
+  // cannot reflow on a phone. The page separates them; so does this.
+  //
+  // Paths, not data URIs: the renderer only does <img src={...}>, and 1,700
+  // figures inlined as base64 would be ~90 MB of database text and ~2 MB added
+  // to every paper load. Served from the frontend's public/ folder they are
+  // cached by the browser and each row stays a few dozen bytes.
+
+  /// The stem, with the options cropped off below it.
+  questionImage String?
+  /// One per choice. Null for a numerical question, which has none.
+  optionAImage  String?
+  optionBImage  String?
+  optionCImage  String?
+  optionDImage  String?
+  /// The worked solution, for sources that print one.
+  solutionImage String?
+
+  /// Language codes this question's text is stored in, e.g. ["en"] or
+  /// ["en","hi"]. The NTA player offers a language switch, so the renderer has
+  /// to know which are actually available before offering it.
+  languages String[] @default(["en"])
+
+  /// Where this question came from. Required for anything published.
+  sourceUrl  String?
+  sourceNote String?
+
+  /// sha256 of the normalised question text. Postgres cannot take a prefix
+  /// length in a unique index and the text is too long to index whole, so the
+  /// hash carries the uniqueness — re-running an import cannot duplicate rows.
+  questionHash String
+
+  createdAt DateTime @default(now())
+
+  @@index([examCode, year])
+  @@index([examCode, subject])
+  // The dashboard's own filter order: exam → year → date → shift. One index
+  // serves it and every leading-prefix query above it.
+  @@index([examCode, year, paperDate, shift])
+  // Chapter-wise practice — "every Rotational Motion question in JEE Main".
+  @@index([examCode, subject, chapterId])
+  // Loading one shift as a mock test, in palette order.
+  @@index([paperId, paperQuestionNumber])
+  @@unique([examCode, questionHash])
+}
+
+/// One shift of one exam — the unit the NTA player runs as a mock test, and the
+/// row the "pick a paper" screen lists.
+///
+/// Denormalised from PreviousYearQuestion on purpose. Listing 22 papers should
+/// not mean aggregating 1980 question rows on every page load, and the paper
+/// needs attributes the questions do not carry — duration, total marks, whether
+/// it is published yet.
+model PyqPaper {
+  /// Stable slug, e.g. "jee-main-2022-s1-2022-06-24-shift1". Matches
+  /// PreviousYearQuestion.paperId.
+  id String @id
+
+  examCode String
+  examName String
+  stream   String?
+  year     Int
+
+  sessionNumber Int?
+  sessionLabel  String?
+  paperDate     DateTime? @db.Date
+  dateLabel     String?
+  shift         Int?
+  shiftLabel    String?
+  shiftTime     String?
+
+  /// 180 for JEE Main Paper 1.
+  durationMinutes Int   @default(180)
+  totalQuestions  Int   @default(90)
+  totalMarks      Int   @default(300)
+  marksCorrect    Float @default(4)
+  marksIncorrect  Float @default(-1)
+
+  /// How many of each subject's Section B questions actually count.
+  ///
+  /// JEE Main 2022 printed 10 numerical questions per subject and let the
+  /// candidate attempt any 5 — which is why a 90-question paper is out of 300
+  /// marks and not 360. Scoring the paper without this rule silently invents a
+  /// different exam, so it is stored per paper rather than assumed: the limit
+  /// has changed between years and does not apply to every exam.
+  /// Null means every question counts.
+  sectionBAttemptLimit Int?
+
+  /// { "Physics": 30, "Chemistry": 30, "Mathematics": 30 } — lets the paper
+  /// card show its make-up without touching the question table.
+  subjectCounts Json @default("{}")
+  /// How many questions still await a Drive scan. Surfaced so an incomplete
+  /// paper is never silently served as a full mock.
+  needsFigureCount Int @default(0)
+
+  /// Which languages the whole paper can be rendered in.
+  languages String[] @default(["en"])
+  /// Off until the operator has cleared the paper for students.
+  isPublished Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([examCode, year, paperDate, shift])
+  @@index([examCode, year])
+  @@index([isPublished])
+}
+
+/// One sitting of a real previous-year paper.
+///
+/// WHY THIS IS NOT A TestSession
+///
+/// PYQ attempts used to be scored and thrown away — scorePyqPaper computed the
+/// result, returned it to the browser and wrote nothing — so a candidate who sat
+/// every paper still read "0 tests attempted" on their profile, and the whole
+/// point of sitting a timed paper (seeing whether you improved) did not exist.
+///
+/// The AI mock tests persist through TestSession, but a real paper cannot reuse
+/// it: TestQuestion requires four non-null options and a Section B numerical
+/// question has none, and satisfying that would mean copying all 90 question
+/// rows on every sitting — duplicating the paper per attempt per user.
+///
+/// So an attempt is one row. The questions already exist in
+/// PreviousYearQuestion; what a sitting adds is which answers this candidate
+/// gave and what that scored.
+model PyqAttempt {
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// Matches PyqPaper.id. FK-free like PreviousYearQuestion.paperId, so an
+  /// attempt survives a paper being re-imported.
+  paperId  String
+  examCode String
+  examName String
+  year     Int
+  /// "Session 1 · 24 Jan 2023 · Shift 1" — enough to label the row in a history
+  /// list without joining back to the paper.
+  label    String?
+
+  /// Marks actually scored, under the paper's own marking scheme — including
+  /// the Section B "best 5 of 10" rule, which is why this is stored rather than
+  /// recomputed from correct/wrong counts.
+  score       Int
+  totalMarks  Int
+  /// Rounded percentage, so history lists and averages do not each re-derive it.
+  percent     Int
+  correct     Int
+  wrong       Int
+  unattempted Int
+
+  timeTakenSeconds Int?
+  /// questionId -> the answer given. Kept so a sitting can be reviewed later
+  /// rather than only scored once.
+  responses        Json @default("{}")
+
+  createdAt DateTime @default(now())
+
+  // The profile lists a user's most recent sittings.
+  @@index([userId, createdAt])
+  @@index([paperId])
+}
+
+/// A visitor asking for an exam Questivo does not cover yet.
+model CourseRequest {
+  id        String   @id @default(uuid())
+  examName  String
+  email     String?
+  userId    String?
+  note      String?  @db.Text
+  /// Repeat asks bump this instead of creating duplicate rows, so demand is
+  /// countable.
+  votes     Int      @default(1)
+  status    String   @default("open")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
 }
 
 model TestQuestion {

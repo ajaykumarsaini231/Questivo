@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { FAQS } from '../lib/seo';
-import { EXAMS, examPath } from '../lib/exams';
+import { examPath } from '../lib/exams';
 import { 
   BookOpen, 
   CheckCircle, 
@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import axios from "axios";
 import { motion, AnimatePresence } from 'framer-motion';
+import { useAudience } from './AudienceProvider';
 
 // --- Types ---
 interface User {
@@ -53,7 +54,11 @@ const HomePage: React.FC = () => {
 
   // Hook for navigation
   const navigate = useNavigate();
-  
+
+  // The visitor's track. Until it has been read this returns every exam and
+  // allows every feature, which is what the prerendered homepage contains.
+  const { visibleExams, allExams, can, audience, focusExam } = useAudience();
+
  const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:4000';
 
 
@@ -168,7 +173,7 @@ const HomePage: React.FC = () => {
                   </div>
                 )}
                 <span className="chip chip-free mb-5">
-                  Free · JEE Main · NEET UG · GATE · SSC CGL · RRB NTPC · UPSC
+                  Free · {visibleExams.map((e) => e.shortName).join(" · ")}
                 </span>
                 {/* Solid ink heading with a single coloured phrase. The old
                     indigo-to-violet gradient across the headline is the most
@@ -179,15 +184,20 @@ const HomePage: React.FC = () => {
                   <span style={{ color: "var(--c-brand)" }}>India&rsquo;s toughest exams</span>
                 </h1>
                 <p className="mb-7 max-w-xl text-[17px] leading-relaxed muted">
-                  Questivo generates unlimited, syllabus-accurate practice papers for JEE Main,
-                  NEET UG, GATE, SSC CGL, RRB NTPC and UPSC — scored instantly, with a
-                  step-by-step explanation on every question.
+                  Questivo gives you real previous year questions with worked solutions, plus
+                  unlimited syllabus-accurate practice papers for{" "}
+                  {visibleExams.map((e) => e.shortName).join(", ").replace(/, ([^,]*)$/, " and $1")}{" "}
+                  — scored instantly, with a step-by-step explanation on every question.
                 </p>
                 <div className="flex flex-col gap-3 sm:flex-row">
                   <button onClick={() => handleStartTest()} className="btn btn-primary btn-lg">
                     Start practising free <ChevronRight className="h-4 w-4" />
                   </button>
-                  <Link to="/mock-test/jee-main" className="btn btn-secondary btn-lg">
+                  {/* The exam directory, not one arbitrary exam page. This
+                      pointed at /mock-test/jee-main, so "browse" showed a
+                      visitor exactly one of the six exams and no way to know
+                      the others existed. */}
+                  <Link to="/exams" className="btn btn-secondary btn-lg">
                     Browse exams
                   </Link>
                 </div>
@@ -321,7 +331,11 @@ const HomePage: React.FC = () => {
           </div>
         </section>
 
-        {/* ================= RESUME ATS SECTION (NEW) ================= */}
+        {/* ================= RESUME ATS SECTION =================
+            Dropped entirely for tracks that do not include it. A JEE aspirant
+            has no resume, and a whole dark panel offering to rewrite one is the
+            clearest possible signal that the page was not built for them. */}
+        {can("resumeAts") && (
         <section className="py-20 bg-white border-y border-slate-100">
           <div className="shell">
             <div className="bg-slate-900 rounded-[10px] p-8 md:p-16 flex flex-col md:flex-row items-center gap-12 shadow-sm">
@@ -339,24 +353,35 @@ const HomePage: React.FC = () => {
             </div>
           </div>
         </section>
+        )}
 
         {/* ================= AVAILABLE TESTS / EXAMS ================= */}
         <section id="exams" className="py-20 bg-slate-50">
           <div className="shell">
             <div className="mb-12 flex flex-col items-center text-center">
               <h2 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
-                Featured Exams
+                {audience ? `${audience.label} exams` : "Featured Exams"}
               </h2>
               <p className="mt-4 max-w-2xl text-lg text-slate-600">
-                Popular exams taken by students this week.
+                {focusExam
+                  ? `Leading with ${focusExam.name}, the exam you told us you're preparing for.`
+                  : audience
+                    ? "The exams on your track. Everything else is one click away."
+                    : "Popular exams taken by students this week."}
               </p>
+              <Link to="/exams" className="btn btn-secondary btn-sm mt-6">
+                {audience
+                  ? `See all ${allExams.length} exams`
+                  : `See all ${allExams.length} exams`}{" "}
+                <ChevronRight className="h-4 w-4" />
+              </Link>
             </div>
 
             {/* Real <Link>s, not onClick divs. These were previously plain
                 divs, so crawlers could not follow them and the exam pages had
                 no inbound internal links at all. */}
             <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-              {EXAMS.map((exam) => (
+              {visibleExams.map((exam) => (
                 <Link
                   key={exam.code}
                   to={examPath(exam)}
@@ -491,15 +516,22 @@ const HomePage: React.FC = () => {
                 title: "Practice",
                 links: [
                   { label: "Generate a mock test", to: "/GenerateTestPage" },
-                  { label: "Featured exams", to: "/#exams" },
+                  { label: "All exams", to: "/exams" },
                   { label: "Why Questivo", to: "/#features" },
                 ],
               },
+              // Career tools follow the same track filter as the nav. The
+              // column disappears entirely when neither tool applies, rather
+              // than leaving an empty heading behind.
               {
                 title: "Career tools",
                 links: [
-                  { label: "ATS resume checker", to: "/resume_ats_score" },
-                  { label: "AI mock interview", to: "/interviews" },
+                  ...(can("resumeAts")
+                    ? [{ label: "ATS resume checker", to: "/resume_ats_score" }]
+                    : []),
+                  ...(can("aiInterview")
+                    ? [{ label: "AI mock interview", to: "/interviews" }]
+                    : []),
                 ],
               },
               {
@@ -509,7 +541,7 @@ const HomePage: React.FC = () => {
                   { label: "Your profile", to: "/profile" },
                 ],
               },
-            ].map((col) => (
+            ].filter((col) => col.links.length > 0).map((col) => (
               <div key={col.title}>
                 <h4 className="font-bold text-white mb-4">{col.title}</h4>
                 <ul className="space-y-2 text-sm">
@@ -526,11 +558,18 @@ const HomePage: React.FC = () => {
           </div>
           {/* Sitewide links to every exam page. Competitors in this vertical
               run 300–1300 internal links per page; this is the cheap, honest
-              version of that — one crawlable link per page that exists. */}
+              version of that — one crawlable link per page that exists.
+
+              Narrowed to the visitor's track, which costs nothing in crawl
+              equity: the prerendered HTML is produced with no track at all, so
+              every crawler still receives the full list. Only a visitor who
+              chose a track sees the short one. */}
           <div className="mt-12 border-t border-slate-800 pt-8">
-            <h4 className="mb-4 font-bold text-white">Free mock tests by exam</h4>
+            <h4 className="mb-4 font-bold text-white">
+              {audience ? "Free mock tests for your exams" : "Free mock tests by exam"}
+            </h4>
             <ul className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
-              {EXAMS.map((e) => (
+              {visibleExams.map((e) => (
                 <li key={e.slug}>
                   <Link
                     to={examPath(e)}

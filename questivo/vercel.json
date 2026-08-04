@@ -37,6 +37,10 @@
   ],
   "rewrites": [
     {
+      "source": "/api/:path*",
+      "destination": "https://questivo.onrender.com/api/:path*"
+    },
+    {
       "source": "/tests/:path*",
       "destination": "/index.html"
     },

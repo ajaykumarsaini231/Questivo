@@ -1,2 +1,6 @@
 .vercel
 .env*
+
+# Local scratch — not part of the project
+archive*.zip
+.claude/

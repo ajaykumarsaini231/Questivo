@@ -47,7 +47,10 @@ export const initializeInterviewSession = async (req, res) => {
 
     // Step A: Parse raw plaintext snapshot data array out of the file buffer stream
     const rawResumeTextSnapshot = await extractTextFromBuffer(req.file.buffer, req.file.mimetype);
-    const userId = req.user?.id || "anonymous-session-layer";
+    // req.user is never populated on this route; optionalAuth sets req.userId.
+    // The old fallback filed every interview under one shared fake user, so no
+    // one could ever list their own sessions.
+    const userId = req.userId || req.user?.id || `anon:${req.ip || "unknown"}`;
     
     // Normalize properties strictly to block invalid null references inside Prisma layer
     const finalRole = String(role).trim();
@@ -117,6 +120,74 @@ export const getInterviewSessionDetails = async (req, res) => {
       data: sessionDetails
     });
 
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+};
+/**
+ * A user's past interview sessions.
+ *
+ * Summary only — the transcript can be long, and the list view does not need
+ * it. Scoped to the caller so session ids cannot be enumerated.
+ */
+export const getInterviewHistory = async (req, res) => {
+  if (!req.userId) {
+    return res.status(200).json({ success: true, data: [], anonymous: true });
+  }
+  try {
+    const sessions = await prisma.interviewSession.findMany({
+      where: { userId: req.userId },
+      orderBy: { createdAt: "desc" },
+      take: 50,
+      select: {
+        id: true,
+        targetRole: true,
+        targetCompany: true,
+        experienceLevel: true,
+        durationMinutes: true,
+        status: true,
+        createdAt: true,
+        evaluation: {
+          select: {
+            overallScore: true,
+            technicalScore: true,
+            communicationScore: true,
+            problemSolving: true,
+          },
+        },
+        _count: { select: { messages: true } },
+      },
+    });
+    return res.status(200).json({ success: true, data: sessions });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+/**
+ * Full transcript of one past interview: every question the AI asked and every
+ * answer the candidate gave, in order, plus the scored feedback.
+ *
+ * The messages were already being written during the live session, so nothing
+ * new is stored to support this — it only exposes what was there.
+ */
+export const getInterviewTranscript = async (req, res) => {
+  try {
+    const session = await prisma.interviewSession.findUnique({
+      where: { id: req.params.sessionId },
+      include: {
+        messages: { orderBy: { createdAt: "asc" } },
+        evaluation: true,
+      },
+    });
+    if (!session) return res.status(404).json({ error: "Session not found" });
+    if (!req.userId || session.userId !== req.userId) {
+      return res.status(403).json({ error: "Not your interview" });
+    }
+    // resumeSnapshot is the candidate's full parsed CV; it is not needed to
+    // review a transcript, so it is not sent back.
+    const { resumeSnapshot, ...safe } = session;
+    return res.status(200).json({ success: true, data: safe });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
