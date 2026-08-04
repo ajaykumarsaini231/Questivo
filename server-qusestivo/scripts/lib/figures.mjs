@@ -184,8 +184,127 @@ function renderRectPixmap(page, rect, scale = SCALE) {
 
 function renderRect(page, rect, scale = SCALE) {
   const pix = renderRectPixmap(page, rect, scale);
-  const png = pix.asPNG();
-  pix.destroy?.();
+  try {
+    return toTrimmedPNG(pix);
+  } finally {
+    pix.destroy?.();
+  }
+}
+
+/* --------------------------- whitespace trimming -------------------------- */
+
+/** Below this grey value a pixel counts as ink rather than page. */
+const INK = 200;
+/** Breathing room left around the ink, in rendered pixels. */
+const TRIM_PAD = 6;
+/**
+ * A row or column this full of ink is a RULE, not content.
+ *
+ * These papers are typeset as tables and every cell has a border. A border runs
+ * the whole width of the crop, so measured naively it fixes the bounds at the
+ * full rectangle and nothing is ever trimmed — the option images came out as
+ * tall empty boxes with a line across the top and the choice tucked in one
+ * corner.
+ */
+const RULE_FRACTION = 0.85;
+
+/**
+ * Cut the blank margins off a rendered crop.
+ *
+ * The rectangles are derived from where text SITS, not from where it ENDS: an
+ * option's box runs from its own marker down to the next row of options, and
+ * the last option's runs to the bottom of the whole question band. On a paper
+ * that spaces its choices generously — or reserves a blank answer area, as GATE
+ * does — that is mostly empty page. Rendered at 2x it is also most of the file
+ * size, and on screen it pushed the four choices a screenful apart.
+ *
+ * Returns null when there is nothing but blank and rules, so an empty box is
+ * never written and the row simply has no image for that part.
+ */
+function trimToInk(pix) {
+  const w = pix.getWidth();
+  const h = pix.getHeight();
+  if (!w || !h) return null;
+  const stride = pix.getStride();
+  const px = pix.getPixels();
+
+  const rowInk = new Int32Array(h);
+  const colInk = new Int32Array(w);
+  for (let y = 0; y < h; y++) {
+    const base = y * stride;
+    for (let x = 0; x < w; x++) {
+      if (px[base + x] < INK) {
+        rowInk[y]++;
+        colInk[x]++;
+      }
+    }
+  }
+
+  // Measure each axis again, IGNORING the other axis's rules.
+  //
+  // A blank table cell still has a border down each side, so its rows contain
+  // two ink pixels and read as content — which is why the first version left an
+  // empty cell hanging under every option. What has to be asked of a row is
+  // whether anything is in it BESIDES the borders passing through it.
+  const ruleRow = new Uint8Array(h);
+  const ruleCol = new Uint8Array(w);
+  for (let y = 0; y < h; y++) ruleRow[y] = rowInk[y] >= w * RULE_FRACTION ? 1 : 0;
+  for (let x = 0; x < w; x++) ruleCol[x] = colInk[x] >= h * RULE_FRACTION ? 1 : 0;
+
+  const contentRow = new Int32Array(h);
+  const contentCol = new Int32Array(w);
+  for (let y = 0; y < h; y++) {
+    if (ruleRow[y]) continue;
+    const base = y * stride;
+    for (let x = 0; x < w; x++) {
+      if (!ruleCol[x] && px[base + x] < INK) {
+        contentRow[y]++;
+        contentCol[x]++;
+      }
+    }
+  }
+
+  const emptyRow = (y) => contentRow[y] === 0;
+  const emptyCol = (x) => contentCol[x] === 0;
+
+  let top = 0;
+  while (top < h && emptyRow(top)) top++;
+  if (top === h) return null;
+  let bottom = h - 1;
+  while (bottom > top && emptyRow(bottom)) bottom--;
+  let left = 0;
+  while (left < w && emptyCol(left)) left++;
+  if (left === w) return null;
+  let right = w - 1;
+  while (right > left && emptyCol(right)) right--;
+
+  top = Math.max(0, top - TRIM_PAD);
+  left = Math.max(0, left - TRIM_PAD);
+  bottom = Math.min(h - 1, bottom + TRIM_PAD);
+  right = Math.min(w - 1, right + TRIM_PAD);
+
+  const tw = right - left + 1;
+  const th = bottom - top + 1;
+  if (tw < 4 || th < 4) return null;
+  if (tw === w && th === h) return pix; // nothing to cut; keep the original
+
+  const out = new mupdf.Pixmap(mupdf.ColorSpace.DeviceGray, [0, 0, tw, th], false);
+  out.clear(255);
+  const dst = out.getPixels();
+  const dstStride = out.getStride();
+  for (let y = 0; y < th; y++) {
+    const from = (top + y) * stride + left;
+    dst.set(px.subarray(from, from + tw), y * dstStride);
+  }
+  return out;
+}
+
+/** Trim, encode, and clean up whichever pixmap the trim produced. */
+function toTrimmedPNG(pix) {
+  const trimmed = trimToInk(pix);
+  if (!trimmed) return null;
+  const png = trimmed.asPNG();
+  if (trimmed !== pix) trimmed.destroy?.();
   return png;
 }
 
@@ -225,9 +344,11 @@ function renderSpan(regions, scale = SCALE) {
       }
       top += h;
     }
-    const png = out.asPNG();
-    out.destroy?.();
-    return png;
+    try {
+      return toTrimmedPNG(out);
+    } finally {
+      out.destroy?.();
+    }
   } finally {
     for (const p of pix) p.destroy?.();
   }
@@ -397,6 +518,10 @@ export function extractFigures({ pdfPath, outDir, wanted, mode }) {
     const write = (name, rect) => {
       try {
         const png = renderRect(page, rect);
+        // Nothing but blank page and cell borders inside that rectangle. No
+        // file is written: an image of empty paper beside a radio button reads
+        // as a choice the examiner printed and left blank.
+        if (!png) return null;
         fs.writeFileSync(path.join(outDir, name), png);
         written++;
         return name;
@@ -408,6 +533,7 @@ export function extractFigures({ pdfPath, outDir, wanted, mode }) {
     const writeSpan = (name, rect, cont) => {
       try {
         const png = renderSpan([{ page, rect }, { page: cont.page, rect: cont.rect }]);
+        if (!png) return null;
         fs.writeFileSync(path.join(outDir, name), png);
         written++;
         return name;

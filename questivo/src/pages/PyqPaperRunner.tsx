@@ -19,10 +19,14 @@
  *      flag rides alongside the response, never instead of it.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import SafeMathRenderer from "../componenets/SafeMathRenderer";
+import PyqResultView, { Stat } from "../componenets/PyqResultView";
+import PremiumDialog from "../componenets/PremiumDialog";
 import { useExamLock } from "../lib/useExamLock";
+import { hhmmss } from "../lib/pyqHistory";
+import { PREMIUM_UNLOCKED } from "../lib/premium";
 import {
   fetchPyqPaper,
   generatePracticePaper,
@@ -52,11 +56,12 @@ const SUBJECT_ORDER = ["Physics", "Chemistry", "Mathematics", "Biology"];
 const isPlaceholderStem = (q?: PyqPaperQuestion | null) =>
   Boolean(q?.diagramImage && /^\[Shown as an image\]/.test(q.questionText || ""));
 
-const hhmmss = (total: number) => {
-  const s = Math.max(0, total);
-  return [Math.floor(s / 3600), Math.floor((s % 3600) / 60), s % 60]
-    .map((n) => String(n).padStart(2, "0"))
-    .join(":");
+/** What the paper calls each kind of question, in its own words. */
+const TYPE_LABEL: Record<string, string> = {
+  mcq_single: "MCQ",
+  mcq_multiple: "MSQ (multiple correct)",
+  numerical: "Numerical",
+  integer: "Numerical",
 };
 
 export default function PyqPaperRunner() {
@@ -66,6 +71,10 @@ export default function PyqPaperRunner() {
   const [paper, setPaper] = useState<PyqPaperMeta | null>(null);
   const [questions, setQuestions] = useState<PyqPaperQuestion[]>([]);
   const [error, setError] = useState<string | null>(null);
+  /** What a generated paper was drawn to. Stored on the attempt at submission
+   *  so the history row can say which paper it was. Null for a real shift,
+   *  which is identified by its own date and shift instead. */
+  const [spec, setSpec] = useState<Record<string, unknown> | undefined>();
 
   const [started, setStarted] = useState(false);
   const [index, setIndex] = useState(0);
@@ -84,27 +93,55 @@ export default function PyqPaperRunner() {
 
   // "practice" is not a stored paper — it is drawn fresh from the question bank
   // on load. Everything downstream treats the two identically.
-  const isPractice = paperId === "practice";
+  const isPractice = paperId === "practice" || paperId === "generated";
+
+  /**
+   * A generated paper is the premium feature, so the free build answers the
+   * request with the upgrade dialog rather than a paper.
+   *
+   * Checked here as well as on the buttons that link here: gating only the
+   * menu entry would leave /pyq/practice reachable by typing it, and a paywall
+   * you can walk around by editing the address bar is not one. The API stays
+   * open — entitlement needs a plan on the user record, which does not exist
+   * yet — so this is a promotion gate in the same sense as lib/featureFlags.ts.
+   */
+  const premiumBlocked = isPractice && !PREMIUM_UNLOCKED;
+
+  // The filter selection the setup flow arrived with, as it was encoded there.
+  // Carried through untouched — this page does not get to reinterpret it, and
+  // the server draws only from what it matches.
+  const search = useLocation().search;
 
   useEffect(() => {
+    if (premiumBlocked) return;
     const ac = new AbortController();
+    const params = new URLSearchParams(search);
     const load = isPractice
-      ? generatePracticePaper("JEE_MAIN", ac.signal)
+      ? generatePracticePaper(params.get("examCode") || "JEE_MAIN", ac.signal, params)
       : fetchPyqPaper(paperId, ac.signal);
 
     load
-      .then(({ paper: p, questions: qs }) => {
+      .then((data) => {
+        const { paper: p, questions: qs } = data;
         setPaper(p);
         setQuestions(qs);
+        setSpec("spec" in data ? (data.spec as Record<string, unknown>) : undefined);
         setRemaining(p.durationMinutes * 60);
       })
       .catch((e) => {
         if (e.name !== "AbortError") setError(e.message);
       });
     return () => ac.abort();
-  }, [paperId, isPractice]);
+  }, [paperId, isPractice, premiumBlocked, search]);
 
   const current = questions[index];
+
+  /** GATE's MSQ: several correct options, stored as a sorted "A,C" string. */
+  const multiSelect = current?.questionType === "mcq_multiple";
+  const chosen = multiSelect ? draft.split(",").filter(Boolean) : [];
+  /** Is the question itself on screen as a picture? Decides what an option
+   *  with no text and no crop of its own can honestly say. */
+  const hasPicture = Boolean(current?.questionImage || current?.diagramImage);
 
   /* -------------------------------- clock -------------------------------- */
 
@@ -196,7 +233,7 @@ export default function PyqPaperRunner() {
       const spent = paper.durationMinutes * 60 - remaining;
       setResult(
         isPractice
-          ? await scorePracticePaper(questions, finalResponses, paper, spent)
+          ? await scorePracticePaper(questions, finalResponses, paper, spent, spec)
           : await scorePyqPaper(paper.id, finalResponses, spent)
       );
       lock.release();
@@ -211,7 +248,7 @@ export default function PyqPaperRunner() {
     // `lock` is created below and is stable across renders except for its
     // counters, which submitting does not read.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [paper, responses, draft, current, remaining, submitting, isPractice, questions]);
+  }, [paper, responses, draft, current, remaining, submitting, isPractice, questions, spec]);
 
   useEffect(() => {
     submitRef.current = submit;
@@ -228,6 +265,23 @@ export default function PyqPaperRunner() {
   });
 
   /* -------------------------------- views -------------------------------- */
+
+  if (premiumBlocked) {
+    return (
+      <>
+        <Centered>
+          <p className="font-medium text-slate-800">Generated Mock Tests are a premium feature.</p>
+          <p className="mt-1 text-sm text-slate-500">
+            Previous year papers are free — pick any exam, year and shift.
+          </p>
+          <Link to="/pyq" className="mt-4 inline-block text-sm text-indigo-600 underline">
+            Back to papers
+          </Link>
+        </Centered>
+        <PremiumDialog open onClose={() => navigate("/pyq")} />
+      </>
+    );
+  }
 
   if (error) {
     return (
@@ -251,11 +305,34 @@ export default function PyqPaperRunner() {
 
   if (result) {
     return (
-      <ResultView
+      <PyqResultView
         paper={paper}
         questions={questions}
         result={result}
         lockedOut={lock.lockedOut}
+        // The scorer reports whether the sitting reached the candidate's
+        // history. Passing it through is the whole fix for "I sat the paper and
+        // it never appeared": either they see it was saved, or they are told
+        // why it was not, at the moment it matters.
+        savedNotice={{ saved: Boolean(result.saved), signedIn: Boolean(result.signedIn) }}
+        actions={
+          <>
+            <Link
+              to="/pyq"
+              className="rounded-lg bg-indigo-600 px-6 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700"
+            >
+              Attempt another paper
+            </Link>
+            {result.attemptId && (
+              <Link
+                to="/profile"
+                className="rounded-lg border border-slate-300 bg-white px-6 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                My test history
+              </Link>
+            )}
+          </>
+        }
       />
     );
   }
@@ -316,8 +393,8 @@ export default function PyqPaperRunner() {
               );
             })}
             <span className="ml-auto rounded bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
-              Section {current?.section} ·{" "}
-              {current?.section === "A" ? "MCQ" : "Numerical"} · +{current?.marksCorrect} /{" "}
+              {current?.section ? `Section ${current.section} · ` : ""}
+              {TYPE_LABEL[current?.questionType ?? ""] ?? "MCQ"} · +{current?.marksCorrect} /{" "}
               {current?.marksIncorrect}
             </span>
           </div>
@@ -373,12 +450,24 @@ export default function PyqPaperRunner() {
               />
             )}
 
-            {current?.section === "A" ? (
+            {/* What the candidate is given to answer with follows the question's
+                TYPE, not its section. Section is a JEE Main idea — A is the
+                multiple-choice block, B the numerical one — and GATE has no
+                equivalent, so keying the input off it showed a number box under
+                all 43 of GATE's multiple-choice questions. */}
+            {current && current.questionType !== "numerical" && current.questionType !== "integer" ? (
               <div className="mt-6 space-y-2.5">
+                {/* GATE's MSQ: more than one option is correct, and the board
+                    awards nothing unless the exact set is chosen. */}
+                {multiSelect && (
+                  <p className="mb-1 text-sm font-medium text-amber-700">
+                    More than one option may be correct — select all that apply.
+                  </p>
+                )}
                 {(["A", "B", "C", "D"] as const).map((letter) => {
                   const text = (current as any)[`option${letter}`] as string | null;
                   const image = (current as any)[`option${letter}Image`] as string | null;
-                  const selected = draft === letter;
+                  const selected = multiSelect ? chosen.includes(letter) : draft === letter;
                   return (
                     <label
                       key={letter}
@@ -389,18 +478,37 @@ export default function PyqPaperRunner() {
                       }`}
                     >
                       <input
-                        type="radio"
+                        type={multiSelect ? "checkbox" : "radio"}
                         name={`q-${current.id}`}
                         checked={selected}
-                        onChange={() => setDraft(letter)}
-                        className="mt-1 h-4 w-4 accent-indigo-600"
+                        onChange={() =>
+                          setDraft(
+                            multiSelect
+                              ? (selected
+                                  ? chosen.filter((c) => c !== letter)
+                                  : [...chosen, letter]
+                                )
+                                  .sort()
+                                  .join(",")
+                              : letter
+                          )
+                        }
+                        className={`mt-1 h-4 w-4 accent-indigo-600 ${multiSelect ? "rounded" : ""}`}
                       />
-                      <span className="font-semibold text-slate-500">({letter})</span>
+                      {/* The crop starts at the printed "(A)", so an option
+                          shown as an image already carries its letter and this
+                          would print it twice. */}
+                      {!image && <span className="font-semibold text-slate-500">({letter})</span>}
                       <span className="flex-1 text-[15px] text-slate-800">
                         {/* The choice as printed, cropped to itself — which is
-                            why the options are separate images. "see figure"
-                            was the old fallback and is only reached when
-                            neither a crop nor readable text exists. */}
+                            why the options are separate images.
+
+                            When a paper draws its choices as figures there is
+                            no text to extract and nothing to anchor a crop on.
+                            Those questions keep their options inside the
+                            question image above, so this says where to look
+                            rather than "not readable", which told the candidate
+                            the choice was lost when it was on screen already. */}
                         {image ? (
                           <img
                             src={image}
@@ -410,8 +518,17 @@ export default function PyqPaperRunner() {
                           />
                         ) : text ? (
                           <SafeMathRenderer text={text} />
+                        ) : hasPicture ? (
+                          <em className="text-slate-500">
+                            choice ({letter}) is in the question image above
+                          </em>
                         ) : (
-                          <em className="text-slate-400">not readable — see the question image</em>
+                          // Nothing on screen states this choice. Saying so is
+                          // the only honest option — pointing at an image that
+                          // is not there would send the candidate hunting.
+                          <em className="text-amber-700">
+                            choice ({letter}) could not be read from the source paper
+                          </em>
                         )}
                       </span>
                     </label>
@@ -762,15 +879,6 @@ function Instructions({
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-lg bg-slate-50 p-4 text-center">
-      <p className="text-xs uppercase tracking-wide text-slate-500">{label}</p>
-      <p className="mt-1 text-xl font-bold text-slate-900">{value}</p>
-    </div>
-  );
-}
-
 function ConfirmDialog({
   paper,
   total,
@@ -832,190 +940,6 @@ function Row({ k, v }: { k: string; v: string }) {
   );
 }
 
-const VERDICT_STYLE: Record<string, string> = {
-  correct: "bg-emerald-100 text-emerald-800",
-  wrong: "bg-rose-100 text-rose-800",
-  unattempted: "bg-slate-100 text-slate-600",
-  bonus: "bg-sky-100 text-sky-800",
-  not_counted: "bg-amber-100 text-amber-800",
-};
-
-const VERDICT_LABEL: Record<string, string> = {
-  correct: "Correct",
-  wrong: "Incorrect",
-  unattempted: "Not attempted",
-  bonus: "Bonus — awarded to all",
-  not_counted: "Beyond the Section B limit — not scored",
-};
-
-function ResultView({
-  paper,
-  questions,
-  result,
-  lockedOut,
-}: {
-  paper: PyqPaperMeta;
-  questions: PyqPaperQuestion[];
-  result: PyqScore;
-  lockedOut?: boolean;
-}) {
-  const [filter, setFilter] = useState<"all" | "wrong" | "unattempted">("all");
-  const byId = useMemo(() => new Map(questions.map((q) => [q.id, q])), [questions]);
-
-  const rows = result.breakdown.filter((r) =>
-    filter === "all" ? true : filter === "wrong" ? r.verdict === "wrong" : r.verdict === "unattempted"
-  );
-
-  return (
-    <div className="min-h-screen bg-slate-50 py-8">
-      <div className="mx-auto max-w-5xl px-4">
-        <p className="text-sm text-slate-500">
-          {paper.examName} · {paper.dateLabel} · {paper.shiftLabel}
-        </p>
-        <h1 className="mt-1 text-3xl font-bold text-slate-900">Your result</h1>
-
-        {/* Say why the paper ended, rather than leaving the candidate to guess
-            whether they ran out of time or something broke. */}
-        {lockedOut && (
-          <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-            <strong>This paper was submitted automatically.</strong> You left the exam window three
-            times. Everything you had answered up to that point has been marked.
-          </div>
-        )}
-
-        <div className="mt-6 grid gap-3 sm:grid-cols-4">
-          <Stat label="Score" value={`${result.score} / ${result.totalMarks}`} />
-          <Stat label="Correct" value={String(result.correct)} />
-          <Stat label="Incorrect" value={String(result.wrong)} />
-          <Stat
-            label="Time taken"
-            value={result.timeTakenSeconds ? hhmmss(result.timeTakenSeconds) : "—"}
-          />
-        </div>
-
-        <div className="mt-4 grid gap-3 sm:grid-cols-3">
-          {result.bySubject.map((s) => (
-            <div key={s.subject} className="rounded-lg border border-slate-200 bg-white p-4">
-              <p className="font-semibold text-slate-800">{s.subject}</p>
-              <p className="mt-1 text-2xl font-bold text-indigo-600">{s.score}</p>
-              <p className="mt-1 text-xs text-slate-500">
-                {s.correct} correct · {s.wrong} incorrect · {s.unattempted} skipped
-              </p>
-            </div>
-          ))}
-        </div>
-
-        <div className="mt-8 flex flex-wrap items-center gap-2">
-          <h2 className="mr-auto text-lg font-semibold text-slate-900">Question review</h2>
-          {(["all", "wrong", "unattempted"] as const).map((f) => (
-            <button
-              key={f}
-              onClick={() => setFilter(f)}
-              className={`rounded-lg px-3 py-1.5 text-sm font-medium ${
-                filter === f ? "bg-indigo-600 text-white" : "bg-white text-slate-700 border border-slate-300"
-              }`}
-            >
-              {f === "all" ? "All" : f === "wrong" ? "Incorrect" : "Not attempted"}
-            </button>
-          ))}
-        </div>
-
-        <div className="mt-4 space-y-3">
-          {rows.map((r) => {
-            const q = byId.get(r.id);
-            return (
-              <div key={r.id} className="rounded-lg border border-slate-200 bg-white p-4">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-semibold text-slate-700">Q{r.paperQuestionNumber}</span>
-                  <span className="text-xs text-slate-500">
-                    {r.subject} · Section {r.section}
-                    {r.chapter ? ` · ${r.chapter}` : ""}
-                  </span>
-                  <span
-                    className={`ml-auto rounded px-2 py-0.5 text-xs font-medium ${VERDICT_STYLE[r.verdict]}`}
-                  >
-                    {VERDICT_LABEL[r.verdict]}
-                  </span>
-                  <span className="rounded bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">
-                    {r.marks > 0 ? `+${r.marks}` : r.marks}
-                  </span>
-                </div>
-
-                {q && (
-                  <div className="mt-2 text-sm text-slate-800">
-                    <SafeMathRenderer text={q.questionText} />
-                  </div>
-                )}
-
-                {/* A question whose text could not be extracted reads as a
-                    placeholder line here, so the review would show the student
-                    a row they cannot recognise. The figure is the question for
-                    those rows, and reviewing a paper is exactly when you need
-                    to see what you got wrong — so it is shown here too, the
-                    same way the player shows it. */}
-                {q?.diagramImage && (
-                  <img
-                    src={q.diagramImage}
-                    alt={`Question ${r.paperQuestionNumber} as printed`}
-                    loading="lazy"
-                    className="mt-2 max-h-96 rounded border border-slate-200"
-                  />
-                )}
-                {!q?.diagramImage && q?.diagramSvg && (
-                  <div
-                    className="mt-2 overflow-x-auto"
-                    // Sanitized server-side by lib/sanitizeSvg.js before storage.
-                    dangerouslySetInnerHTML={{ __html: q.diagramSvg }}
-                  />
-                )}
-
-                <p className="mt-2 text-sm">
-                  <span className="text-slate-500">Your answer: </span>
-                  <strong className="text-slate-800">{r.yourAnswer ?? "—"}</strong>
-                  <span className="ml-4 text-slate-500">Correct: </span>
-                  <strong className="text-emerald-700">{r.correctAnswer ?? "awarded to all"}</strong>
-                </p>
-
-                {/* The booklet's own worked solution, as printed. Preferred
-                    over the extracted text: a derivation is stacked fractions
-                    and integral signs, which no text layer linearises — 793 of
-                    them extract as loose operators. */}
-                {(r.solutionImage || (r.solution && r.solutionQuality === "prose")) && (
-                  <details className="mt-2">
-                    <summary className="cursor-pointer text-sm font-medium text-indigo-600">
-                      Solution
-                    </summary>
-                    <div className="mt-2 text-sm text-slate-700">
-                      {r.solutionImage ? (
-                        <img
-                          src={r.solutionImage}
-                          alt={`Worked solution for question ${r.paperQuestionNumber}`}
-                          loading="lazy"
-                          className="max-w-full rounded border border-slate-200"
-                        />
-                      ) : (
-                        <SafeMathRenderer text={r.solution!} />
-                      )}
-                    </div>
-                  </details>
-                )}
-              </div>
-            );
-          })}
-        </div>
-
-        <div className="mt-8 flex gap-3">
-          <Link
-            to="/pyq"
-            className="rounded-lg bg-indigo-600 px-6 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700"
-          >
-            Attempt another paper
-          </Link>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 function Centered({ children }: { children: React.ReactNode }) {
   return (

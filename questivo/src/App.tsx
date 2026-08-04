@@ -38,7 +38,11 @@ const ResultPage = lazy(() => import("./componenets/result"));
 // Never prerendered — the picker's content is a live query and the player is
 // only ever reached by a signed-in candidate choosing a paper.
 const PyqPapersPage = lazy(() => import("./pages/PyqPapersPage"));
+const ExamSetupPage = lazy(() => import("./pages/ExamSetupPage"));
 const PyqPaperRunner = lazy(() => import("./pages/PyqPaperRunner"));
+// Reopening a saved sitting. Shares the result view with the player above, so
+// it costs nothing beyond its own fetch.
+const PyqAttemptReview = lazy(() => import("./pages/PyqAttemptReview"));
 // react-icons is only used by the auth screen.
 const Signup = lazy(() => import("./componenets/SignupPage"));
 const ProfilePage = lazy(() => import("./componenets/ProfilePage"));
@@ -167,6 +171,14 @@ export function AppContent() {
             specific paper sat on one specific day, so the only thing the
             candidate chooses is which — never topics, count or difficulty. */}
         <Route path="/pyq" element={<PyqPapersPage />} />
+        {/* The guided flow — exam, then kind, then whatever filters that exam
+            actually supports. Declared before "/pyq/:paperId" so "setup" is
+            never taken for a paper id. */}
+        <Route path="/pyq/setup" element={<ExamSetupPage />} />
+        <Route path="/test-setup" element={<ExamSetupPage />} />
+        {/* Declared before "/pyq/:paperId" so "attempt" is never taken for a
+            paper id and run as a paper. */}
+        <Route path="/pyq/attempt/:attemptId" element={<PyqAttemptReview />} />
         <Route path="/pyq/:paperId" element={<PyqPaperRunner />} />
 
         {/* ================= AUTH ROUTES ================= */}

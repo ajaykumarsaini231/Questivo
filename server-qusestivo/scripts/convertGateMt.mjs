@@ -453,10 +453,15 @@ function buildManifest(rows) {
         sessionNumber: null,
         sessionLabel: null,
         paperDate: null,
+        // What the paper card shows. JEE Main fills these with "24 Jun 2022"
+        // and "Shift 1" because it sat six papers that year; GATE MT is one
+        // sitting, so the card said "2025" over an empty line. It now names
+        // what it is — the card is the thing a candidate clicks, and a blank
+        // subtitle reads as a paper that failed to load.
         dateLabel: String(r.year),
         shift: null,
-        shiftLabel: null,
-        shiftTime: null,
+        shiftLabel: "Full paper",
+        shiftTime: "3 hours",
         label: `GATE Metallurgical Engineering ${r.year}`,
         durationMinutes: DURATION_MIN,
         totalQuestions: 0,

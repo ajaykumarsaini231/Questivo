@@ -15,6 +15,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { PREMIUM_UNLOCKED } from "../lib/premium";
 import {
   fetchPyqPapers,
   type PyqPaperExam,
@@ -171,19 +172,26 @@ export default function PyqPapersPage() {
           render={(y) => y.year}
         />
 
-        <ChoiceRow
-          label="Session"
-          items={yearRow?.sessions ?? []}
-          isSelected={(s) => s.sessionLabel === session?.sessionLabel}
-          onSelect={(s) =>
-            set({ exam: exam.examCode, year: String(yearRow!.year), session: s.sessionLabel })
-          }
-          render={(s) => s.sessionLabel}
-        />
+        {/* Only where there is a choice to make. JEE Main sat two sessions a
+            year and the row is the point of the page; GATE sits one paper a
+            year and its rows came back with a single unnamed "Session" chip —
+            a control offering exactly one option, which reads as though the
+            other options failed to load. */}
+        {(yearRow?.sessions?.length ?? 0) > 1 && (
+          <ChoiceRow
+            label="Session"
+            items={yearRow?.sessions ?? []}
+            isSelected={(s) => s.sessionLabel === session?.sessionLabel}
+            onSelect={(s) =>
+              set({ exam: exam.examCode, year: String(yearRow!.year), session: s.sessionLabel })
+            }
+            render={(s) => s.sessionLabel}
+          />
+        )}
 
         <div className="mb-3 flex items-baseline gap-3">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
-            Date &amp; Shift
+            {(session?.papers ?? []).some((p) => p.shift !== null) ? "Date & Shift" : "Paper"}
           </h2>
           <span className="text-xs text-slate-400">
             {session?.papers.length ?? 0} paper{(session?.papers.length ?? 0) === 1 ? "" : "s"}
@@ -207,9 +215,11 @@ function PaperCard({ paper, onStart }: { paper: PyqPaperSummary; onStart: () => 
       <div className="flex items-start justify-between gap-2">
         <div>
           <p className="font-semibold text-slate-900">{paper.dateLabel}</p>
+          {/* An exam with no shifts leaves shiftLabel null, and the line
+              rendered empty — a card with a title and a blank row under it.
+              Falls back to what the paper IS. */}
           <p className="text-sm text-slate-500">
-            {paper.shiftLabel}
-            {paper.shiftTime ? ` · ${paper.shiftTime}` : ""}
+            {[paper.shiftLabel, paper.shiftTime].filter(Boolean).join(" · ") || "Full paper"}
           </p>
         </div>
         <span className="shrink-0 rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600">
@@ -261,6 +271,23 @@ function GeneratePaperButton() {
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
 
+  /**
+   * Opens the setup screen, where the candidate chooses exam, subjects,
+   * chapters and length before anything is drawn.
+   *
+   * This used to open the upgrade dialog on the spot, which orphaned
+   * /pyq/setup — nothing else in the app linked to it, so the filter screen
+   * was unreachable and the generator looked as though it had been taken away.
+   * Choosing filters costs nothing and generates nothing, so it is not the
+   * thing to gate. The gate belongs on the button that actually builds the
+   * paper: ExamSetupPage submits to /pyq/practice, and PyqPaperRunner still
+   * refuses that in the free build.
+   */
+  const startGenerated = () => {
+    setOpen(false);
+    navigate("/pyq/setup");
+  };
+
   return (
     <div className="relative">
       <button
@@ -282,17 +309,27 @@ function GeneratePaperButton() {
           />
           <div className="absolute right-0 z-20 mt-2 w-80 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg">
             <button
-              onClick={() => navigate("/pyq/practice")}
+              onClick={startGenerated}
               className="block w-full border-b border-slate-100 p-4 text-left transition hover:bg-indigo-50"
             >
-              <p className="font-semibold text-slate-900">From previous year questions</p>
+              <p className="flex items-center gap-2 font-semibold text-slate-900">
+                Generate Mock Test
+                {!PREMIUM_UNLOCKED && (
+                  <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-800">
+                    Premium
+                  </span>
+                )}
+              </p>
               <p className="mt-1 text-sm text-slate-600">
-                A fresh paper in the real pattern, drawn from questions that were actually examined.
-                Instant, and free.
+                A balanced paper in the real pattern, drawn from questions that were actually
+                examined. Instant, and unlimited.
               </p>
             </button>
             <button
-              onClick={() => navigate("/GenerateTestPage")}
+              onClick={() => {
+                setOpen(false);
+                navigate("/GenerateTestPage");
+              }}
               className="block w-full p-4 text-left transition hover:bg-indigo-50"
             >
               <p className="font-semibold text-slate-900">Written by AI</p>

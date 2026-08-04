@@ -44,6 +44,12 @@ export interface PyqPaperYear {
 export interface PyqPaperExam {
   examCode: string;
   label: string;
+  /**
+   * Shifts held for this exam. The server orders the list by it, deepest first,
+   * so `exams[0]` is the exam worth defaulting to rather than whichever code
+   * happens to sort first.
+   */
+  paperCount?: number;
   years: PyqPaperYear[];
 }
 
@@ -126,6 +132,18 @@ export interface PyqScore {
   sectionBAttemptLimit: number | null;
   bySubject: { subject: string; score: number; correct: number; wrong: number; unattempted: number }[];
   breakdown: PyqScoreRow[];
+  /**
+   * Whether this sitting reached the candidate's history, and why not.
+   *
+   * The score screen has to be able to say so. A paper that is scored, shown
+   * and then quietly not stored is indistinguishable, from the candidate's
+   * side, from one that was stored — until they go looking for it later and
+   * find nothing. `attemptId` is the row it became, and what the review screen
+   * is reached by.
+   */
+  attemptId?: string | null;
+  saved?: boolean;
+  signedIn?: boolean;
 }
 
 async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
@@ -156,12 +174,38 @@ export const fetchPyqPaper = (paperId: string, signal?: AbortSignal) =>
     signal
   ).then((r) => r.data);
 
-/** A fresh paper drawn from the question bank, in the real exam's shape. */
-export const generatePracticePaper = (examCode = "JEE_MAIN", signal?: AbortSignal) =>
-  getJson<{ data: { paper: PyqPaperMeta; questions: PyqPaperQuestion[] } }>(
-    `/api/pyq/practice/generate?examCode=${encodeURIComponent(examCode)}`,
-    signal
-  ).then((r) => r.data);
+/**
+ * A fresh paper drawn from the question bank, in the real exam's shape.
+ *
+ * `spec` is what the server was asked for, echoed back. It is carried through
+ * to the scorer and stored on the attempt, because a drawn paper has no shift
+ * or date to identify it by later — without the spec, a history row can only
+ * say "a generated paper", not which one.
+ */
+export const generatePracticePaper = (
+  examCode = "JEE_MAIN",
+  signal?: AbortSignal,
+  /**
+   * The candidate's filter selection, already encoded (see lib/examSetup.ts).
+   *
+   * Passed straight through to the server, which draws ONLY from what it
+   * matches. It is not a hint or a preference: a spec naming one topic yields a
+   * paper of that topic or an error saying how many questions exist, never a
+   * paper quietly topped up from elsewhere.
+   */
+  filters?: URLSearchParams | string
+) => {
+  const p = new URLSearchParams(filters ?? "");
+  p.set("examCode", examCode);
+  return getJson<{
+    data: {
+      paper: PyqPaperMeta;
+      questions: PyqPaperQuestion[];
+      spec?: Record<string, unknown>;
+      warnings?: string[];
+    };
+  }>(`/api/pyq/practice/generate?${p}`, signal).then((r) => r.data);
+};
 
 /**
  * Score a generated paper.
@@ -174,7 +218,10 @@ export async function scorePracticePaper(
   questions: PyqPaperQuestion[],
   responses: Record<string, string>,
   paper: PyqPaperMeta,
-  timeTakenSeconds: number
+  timeTakenSeconds: number,
+  /** The generation request, stored on the attempt so history can say what the
+   *  paper was — a drawn paper has no shift or date to identify it by. */
+  spec?: Record<string, unknown>
 ): Promise<PyqScore> {
   const res = await fetch(`${API_BASE}/api/pyq/practice/score`, {
     method: "POST",
@@ -187,6 +234,8 @@ export async function scorePracticePaper(
       sectionBAttemptLimit: paper.sectionBAttemptLimit,
       durationMinutes: paper.durationMinutes,
       timeTakenSeconds,
+      label: paper.shiftLabel,
+      spec,
     }),
   });
   const json = await res.json().catch(() => ({}));
