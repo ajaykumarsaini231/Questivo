@@ -2,6 +2,9 @@ import prisma from "../prismaClient.js";
 import { chat, ROLES } from "../lib/aiClient.js";
 import { PYQ_EXAMS, resolvePyqExamCode, profileToBrief } from "../lib/pyqPattern.js";
 import { buildPyqProfile } from "../lib/pyqProfile.js";
+import { markPaper, MARKING_SELECT } from "../lib/pyqMarking.js";
+import { generatePaper, GENERATOR_PATTERNS } from "../lib/pyqGenerator.js";
+import { DRAWABLE, buildQuestionWhere, examFacets, normalizeSpec } from "../lib/pyqFilters.js";
 
 /* ------------------------------ read APIs ------------------------------- */
 
@@ -394,308 +397,47 @@ export const scorePyqPaper = async (req, res) => {
     const questions = await prisma.previousYearQuestion.findMany({
       where: { paperId: paper.id },
       orderBy: { paperQuestionNumber: "asc" },
-      select: {
-        id: true, paperQuestionNumber: true, questionNumber: true, subject: true, section: true,
-        chapter: true, correctAnswer: true, questionType: true, status: true,
-        marksCorrect: true, marksIncorrect: true, solution: true, solutionQuality: true, solutionImage: true,
-      },
+      select: MARKING_SELECT,
     });
     if (!questions.length) return res.status(404).json({ error: "This paper has no questions stored" });
 
+    const timeTakenSeconds = Number(req.body?.timeTakenSeconds) || null;
     const result = markPaper(questions, responses, {
       totalMarks: paper.totalMarks,
       sectionBAttemptLimit: paper.sectionBAttemptLimit,
       durationMinutes: paper.durationMinutes,
-      timeTakenSeconds: Number(req.body?.timeTakenSeconds) || null,
+      timeTakenSeconds,
     });
 
-    // Record the sitting for a signed-in candidate.
-    //
-    // Deliberately after the result is computed and deliberately not awaited
-    // into the response path: a candidate who has just spent three hours on a
-    // paper must get their score even if the write fails, so a storage problem
-    // degrades to "not in your history" rather than "your paper is lost".
-    let attemptId = null;
-    if (req.userId) {
-      try {
-        const attempt = await prisma.pyqAttempt.create({
-          data: {
-            userId: req.userId,
-            paperId: paper.id,
-            examCode: paper.examCode,
-            examName: paper.examName,
-            year: paper.year,
-            label: [paper.sessionLabel, paper.dateLabel, paper.shiftLabel].filter(Boolean).join(" · "),
-            score: Math.round(result.score),
-            totalMarks: paper.totalMarks,
-            percent: paper.totalMarks
-              ? Math.round((result.score / paper.totalMarks) * 100)
-              : 0,
-            correct: result.correct ?? 0,
-            wrong: result.wrong ?? 0,
-            unattempted: result.unattempted ?? 0,
-            timeTakenSeconds: Number(req.body?.timeTakenSeconds) || null,
-            responses,
-          },
-          select: { id: true },
-        });
-        attemptId = attempt.id;
-      } catch (e) {
-        console.warn(`[pyq] could not record attempt for ${paper.id}: ${e.message}`);
-      }
-    }
-
-    res.json({ success: true, data: { paperId: paper.id, attemptId, ...result } });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-};
-
-/** Numerical answers match on value, not on string — "6" equals "6.00". */
-function numericallyEqual(a, b) {
-  const x = Number(a);
-  const y = Number(b);
-  if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
-  // The papers are keyed to 2dp at most, so this tolerance only absorbs float
-  // representation, never a genuinely different answer.
-  return Math.abs(x - y) < 0.005;
-}
-
-/**
- * Mark a set of questions against the stored key.
- *
- * Shared by the real-paper and generated-paper scorers so the two can never
- * drift — a practice paper that marked differently from the archive would make
- * its score meaningless as a comparison.
- */
-function markPaper(questions, responses, opts = {}) {
-  const given = (id) => {
-    const v = responses[id];
-    return v === undefined || v === null || String(v).trim() === "" ? null : String(v).trim();
-  };
-
-  // Which Section B answers count, decided before any marking.
-  const limit = opts.sectionBAttemptLimit;
-  const counted = new Set();
-  const usedBySubject = new Map();
-
-  for (const q of questions) {
-    if (q.section !== "B" || !limit) {
-      counted.add(q.id);
-      continue;
-    }
-    if (given(q.id) === null) continue; // unattempted takes no slot
-    const used = usedBySubject.get(q.subject) || 0;
-    if (used < limit) {
-      counted.add(q.id);
-      usedBySubject.set(q.subject, used + 1);
-    }
-  }
-
-  let score = 0;
-  let correct = 0;
-  let wrong = 0;
-  let unattempted = 0;
-  const bySubject = {};
-  const breakdown = [];
-
-  for (const q of questions) {
-    const answer = given(q.id);
-    const isBonus = q.status === "bonus";
-
-    let verdict;
-    let marks = 0;
-
-    if (isBonus) {
-      // Awarded to everyone on the day, whether or not they answered.
-      verdict = "bonus";
-      marks = q.marksCorrect;
-    } else if (!counted.has(q.id)) {
-      verdict = "not_counted";
-    } else if (answer === null) {
-      verdict = "unattempted";
-    } else if (
-      q.questionType === "numerical" || q.questionType === "integer"
-        ? numericallyEqual(answer, q.correctAnswer)
-        : answer.toUpperCase() === String(q.correctAnswer || "").toUpperCase()
-    ) {
-      verdict = "correct";
-      marks = q.marksCorrect;
-    } else {
-      verdict = "wrong";
-      marks = q.marksIncorrect;
-    }
-
-    score += marks;
-    if (verdict === "correct" || verdict === "bonus") correct++;
-    else if (verdict === "wrong") wrong++;
-    else if (verdict === "unattempted") unattempted++;
-
-    const s = (bySubject[q.subject] ||= {
-      subject: q.subject, score: 0, correct: 0, wrong: 0, unattempted: 0,
+    const attemptId = await recordAttempt(req.userId, {
+      kind: "pyq",
+      paperId: paper.id,
+      examCode: paper.examCode,
+      examName: paper.examName,
+      year: paper.year,
+      sessionLabel: paper.sessionLabel,
+      dateLabel: paper.dateLabel,
+      shiftLabel: paper.shiftLabel,
+      subject: null,
+      totalMarks: paper.totalMarks,
+      questionIds: questions.map((q) => q.id),
+      responses,
+      timeTakenSeconds,
+      result,
     });
-    s.score += marks;
-    if (verdict === "correct" || verdict === "bonus") s.correct++;
-    else if (verdict === "wrong") s.wrong++;
-    else if (verdict === "unattempted") s.unattempted++;
-
-    breakdown.push({
-      id: q.id,
-      paperQuestionNumber: q.paperQuestionNumber ?? null,
-      subject: q.subject,
-      section: q.section,
-      chapter: q.chapter,
-      yourAnswer: answer,
-      correctAnswer: q.correctAnswer,
-      verdict,
-      marks,
-      // Released only now that the paper is over.
-      solution: q.solution,
-      solutionQuality: q.solutionQuality,
-      // The worked solution as the booklet printed it. Released with the rest
-      // of the answer, never before.
-      solutionImage: q.solutionImage ?? null,
-    });
-  }
-
-  return {
-    score,
-    totalMarks: opts.totalMarks ?? null,
-    correct,
-    wrong,
-    unattempted,
-    durationMinutes: opts.durationMinutes ?? null,
-    timeTakenSeconds: opts.timeTakenSeconds ?? null,
-    sectionBAttemptLimit: limit ?? null,
-    bySubject: Object.values(bySubject),
-    breakdown,
-  };
-}
-
-/* ──────────────── a fresh paper built from the question bank ───────────────
- *
- * The other way to get a paper. Instead of sitting one specific shift, draw a
- * new paper from every previous year question we hold, following the real
- * exam's shape — 20 MCQ + 10 numerical per subject, 180 minutes, +4/−1.
- *
- * Costs nothing and takes no model call, which is the point: the AI generator
- * writes new questions and is slow and metered, whereas this is a database
- * read over questions that were actually examined.
- */
-
-/** Exam shape. Same numbers the real paper uses. */
-const PRACTICE_PATTERN = {
-  JEE_MAIN: {
-    subjects: ["Physics", "Chemistry", "Mathematics"],
-    sectionA: 20,
-    sectionB: 10,
-    sectionBAttemptLimit: 5,
-    durationMinutes: 180,
-    marksCorrect: 4,
-    marksIncorrect: -1,
-  },
-};
-
-/** Fisher–Yates, so the draw is uniform rather than sort-comparator folklore. */
-function shuffle(list) {
-  const a = [...list];
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-}
-
-export const generatePracticePaper = async (req, res) => {
-  try {
-    const examCode = resolvePyqExamCode(req.query.examCode || req.body?.examCode || "JEE_MAIN");
-    const pattern = PRACTICE_PATTERN[examCode];
-    if (!pattern) {
-      return res.status(404).json({ error: "No practice pattern for this exam yet", canRequest: true });
-    }
-
-    const years = String(req.query.years || req.body?.years || "")
-      .split(",")
-      .map((y) => Number(y.trim()))
-      .filter(Boolean);
-
-    const questions = [];
-    let paperNumber = 0;
-
-    for (const subject of pattern.subjects) {
-      for (const [section, want] of [["A", pattern.sectionA], ["B", pattern.sectionB]]) {
-        // needsFigure rows are excluded: their text alone is not answerable, and
-        // a practice paper has no scan to fall back on the way a real shift does.
-        const pool = await prisma.previousYearQuestion.findMany({
-          where: {
-            examCode,
-            subject,
-            section,
-            needsFigure: false,
-            status: "ok",
-            correctAnswer: { not: null },
-            ...(years.length ? { year: { in: years } } : {}),
-          },
-          select: {
-            id: true, subject: true, section: true, chapter: true, year: true,
-            questionText: true, optionA: true, optionB: true, optionC: true, optionD: true,
-            questionType: true, diagramSvg: true, diagramImage: true, sourceUrl: true,
-            questionImage: true, optionAImage: true, optionBImage: true,
-            optionCImage: true, optionDImage: true,
-          },
-        });
-
-        if (pool.length < want) {
-          return res.status(409).json({
-            error:
-              `Not enough ${subject} Section ${section} questions to build a paper ` +
-              `(${pool.length} available, ${want} needed).`,
-          });
-        }
-
-        for (const q of shuffle(pool).slice(0, want)) {
-          questions.push({
-            ...q,
-            paperQuestionNumber: ++paperNumber,
-            questionNumber: ((paperNumber - 1) % 30) + 1,
-            marksCorrect: pattern.marksCorrect,
-            marksIncorrect: pattern.marksIncorrect,
-            status: "ok",
-            needsFigure: false,
-            figureHint: null,
-          });
-        }
-      }
-    }
-
-    const total = pattern.subjects.length * (pattern.sectionA + pattern.sectionBAttemptLimit);
 
     res.json({
       success: true,
       data: {
-        paper: {
-          id: "practice",
-          examCode,
-          examName: PYQ_EXAMS[examCode]?.label || examCode,
-          stream: "B.E./B.Tech",
-          year: new Date().getFullYear(),
-          dateLabel: "Practice paper",
-          shiftLabel: "Built from previous year questions",
-          shiftTime: null,
-          sessionLabel: null,
-          durationMinutes: pattern.durationMinutes,
-          totalQuestions: questions.length,
-          totalMarks: total * pattern.marksCorrect,
-          marksCorrect: pattern.marksCorrect,
-          marksIncorrect: pattern.marksIncorrect,
-          sectionBAttemptLimit: pattern.sectionBAttemptLimit,
-          subjectCounts: Object.fromEntries(
-            pattern.subjects.map((s) => [s, pattern.sectionA + pattern.sectionB])
-          ),
-          needsFigureCount: 0,
-          languages: ["en"],
-        },
-        questions,
+        paperId: paper.id,
+        attemptId,
+        // Stated so the player can tell the candidate their paper was saved —
+        // or, when they are not signed in, that it was not. A sitting that
+        // silently fails to persist is the bug this whole feature exists to
+        // fix, and it must never be silent again.
+        saved: Boolean(attemptId),
+        signedIn: Boolean(req.userId),
+        ...result,
       },
     });
   } catch (err) {
@@ -704,12 +446,361 @@ export const generatePracticePaper = async (req, res) => {
 };
 
 /**
- * Score an arbitrary set of questions.
+ * Write one sitting to the candidate's history.
+ *
+ * Deliberately after the result is computed, and deliberately swallowing its
+ * own errors: a candidate who has just spent three hours on a paper must get
+ * their score even if the write fails, so a storage problem degrades to "not in
+ * your history" rather than "your paper is lost". The caller reports which of
+ * those happened via `saved`.
+ *
+ * @returns {Promise<string|null>} the attempt id, or null when nothing was
+ *          written — either nobody was signed in, or the insert failed.
+ */
+async function recordAttempt(userId, a) {
+  if (!userId) return null;
+  try {
+    const attempt = await prisma.pyqAttempt.create({
+      data: {
+        userId,
+        kind: a.kind,
+        paperId: a.paperId,
+        examCode: a.examCode,
+        examName: a.examName,
+        year: a.year,
+        label: [a.sessionLabel, a.dateLabel, a.shiftLabel].filter(Boolean).join(" · ") || null,
+        sessionLabel: a.sessionLabel ?? null,
+        dateLabel: a.dateLabel ?? null,
+        shiftLabel: a.shiftLabel ?? null,
+        subject: a.subject ?? null,
+        score: Math.round(a.result.score),
+        totalMarks: a.totalMarks ?? 0,
+        percent: a.totalMarks ? Math.round((a.result.score / a.totalMarks) * 100) : 0,
+        correct: a.result.correct ?? 0,
+        wrong: a.result.wrong ?? 0,
+        unattempted: a.result.unattempted ?? 0,
+        timeTakenSeconds: a.timeTakenSeconds ?? null,
+        questionIds: a.questionIds ?? [],
+        totalQuestions: a.questionIds?.length ?? null,
+        spec: a.spec ?? undefined,
+        responses: a.responses ?? {},
+      },
+      select: { id: true },
+    });
+    return attempt.id;
+  } catch (e) {
+    console.warn(`[pyq] could not record ${a.kind} attempt for ${a.paperId}: ${e.message}`);
+    return null;
+  }
+}
+
+/* ──────────────── a fresh paper built from the question bank ───────────────
+ *
+ * The third way to get a paper. Instead of sitting one specific shift, draw a
+ * new one from every previous year question we hold, following the real exam's
+ * shape.
+ *
+ * Costs nothing and takes no model call, which is the point: the AI generator
+ * writes new questions and is slow and metered, whereas this is a database read
+ * over questions that were actually examined. The drawing itself lives in
+ * lib/pyqGenerator.js — this is only the HTTP shell around it.
+ */
+
+/**
+ * Read a generation spec from wherever the caller put it.
+ *
+ * GET /practice/generate carries it in the query string as comma-joined
+ * strings; POST /generate carries real JSON arrays. Normalising both here means
+ * the generator never has to know which door the request came through.
+ */
+function readGenerateSpec(req) {
+  const src = { ...(req.query || {}), ...(req.body || {}) };
+
+  const list = (v) =>
+    Array.isArray(v)
+      ? v.map((x) => String(x).trim()).filter(Boolean)
+      : String(v ?? "")
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+
+  // Every filter the picker offers is carried through to the draw. One that is
+  // read here but not passed on is worse than one that does not exist: the UI
+  // shows it as applied, the preview counts it, and the paper ignores it.
+  const spec = {
+    ...normalizeSpec(src),
+    examCode: resolvePyqExamCode(src.examCode || "JEE_MAIN") || "JEE_MAIN",
+    subjects: list(src.subjects),
+    chapters: list(src.chapters),
+    years: list(src.years).map(Number).filter(Number.isFinite),
+    difficulty: ["easy", "medium", "hard", "mixed"].includes(src.difficulty)
+      ? src.difficulty
+      : "mixed",
+  };
+
+  if (src.totalQuestions != null && Number(src.totalQuestions) > 0) {
+    // Capped: the marker, the palette and the review list all render every
+    // question, and a request for ten thousand is a mistake or an attack.
+    spec.totalQuestions = Math.min(Number(src.totalQuestions), 200);
+  }
+  if (src.durationMinutes != null && Number(src.durationMinutes) > 0) {
+    spec.durationMinutes = Math.min(Number(src.durationMinutes), 600);
+  }
+  if (src.distribution && typeof src.distribution === "object") {
+    spec.distribution = src.distribution;
+  }
+  return spec;
+}
+
+/**
+ * Draw a paper. Serves both GET /practice/generate and POST /generate.
+ *
+ * Like getPyqPaper, the answer key is absent from the response by construction
+ * — lib/pyqGenerator.js never selects `correctAnswer`. Scoring is a round trip
+ * to scoreQuestionSet below.
+ */
+export const generateMockPaper = async (req, res) => {
+  try {
+    const spec = readGenerateSpec(req);
+    const { paper, questions, warnings } = await generatePaper(spec);
+    res.json({
+      success: true,
+      data: {
+        paper,
+        questions,
+        spec,
+        // Never silent about a substitution: a chapter that could not be filled
+        // or a difficulty the archive cannot yet evidence is said out loud.
+        ...(warnings.length ? { warnings } : {}),
+      },
+    });
+  } catch (err) {
+    const status = err.status || 500;
+    res.status(status).json({
+      error: err.message,
+      ...(err.canRequest ? { canRequest: true } : {}),
+      // So the UI can say "56 available, you asked for 100" rather than only
+      // repeating the sentence. Sent whenever the draw ran short.
+      ...(err.available !== undefined ? { available: err.available, needed: err.needed } : {}),
+    });
+  }
+};
+
+/** Which exams can be drawn from, and what the picker should offer for each. */
+export const getGeneratorOptions = async (req, res) => {
+  try {
+    const examCode = resolvePyqExamCode(req.query.examCode || "JEE_MAIN");
+    const pattern = examCode ? GENERATOR_PATTERNS[examCode] : null;
+    if (!pattern) {
+      return res.status(404).json({
+        error: "No generator pattern for this exam yet",
+        canRequest: true,
+        exams: Object.keys(GENERATOR_PATTERNS).map((code) => ({
+          examCode: code,
+          label: PYQ_EXAMS[code]?.label || code,
+        })),
+      });
+    }
+
+    // Only subjects and chapters that actually HAVE drawable questions are
+    // offered. Listing a chapter the bank cannot fill turns the picker into a
+    // way to produce an error.
+    const grouped = await prisma.previousYearQuestion.groupBy({
+      by: ["subject", "chapter"],
+      where: { examCode, needsFigure: false, status: "ok", correctAnswer: { not: null } },
+      _count: { _all: true },
+    });
+    const years = await prisma.previousYearQuestion.groupBy({
+      by: ["year"],
+      where: { examCode, needsFigure: false, status: "ok", correctAnswer: { not: null } },
+      _count: { _all: true },
+      orderBy: { year: "desc" },
+    });
+
+    const bySubject = new Map();
+    for (const row of grouped) {
+      if (!bySubject.has(row.subject)) {
+        bySubject.set(row.subject, { subject: row.subject, total: 0, chapters: [] });
+      }
+      const s = bySubject.get(row.subject);
+      s.total += row._count._all;
+      if (row.chapter) s.chapters.push({ chapter: row.chapter, count: row._count._all });
+    }
+    for (const s of bySubject.values()) {
+      s.chapters.sort((a, b) => b.count - a.count || a.chapter.localeCompare(b.chapter));
+    }
+
+    res.json({
+      success: true,
+      data: {
+        examCode,
+        label: PYQ_EXAMS[examCode]?.label || examCode,
+        pattern: {
+          subjects: pattern.subjects,
+          sectionA: pattern.sectionA,
+          sectionB: pattern.sectionB,
+          sectionBAttemptLimit: pattern.sectionBAttemptLimit,
+          durationMinutes: pattern.durationMinutes,
+          fullLength: pattern.subjects.length * (pattern.sectionA + pattern.sectionB),
+        },
+        subjects: [...bySubject.values()].sort((a, b) => b.total - a.total),
+        years: years.map((y) => ({ year: y.year, count: y._count._all })),
+        exams: Object.keys(GENERATOR_PATTERNS).map((code) => ({
+          examCode: code,
+          label: PYQ_EXAMS[code]?.label || code,
+        })),
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+/**
+ * Every exam the archive can actually put a paper together for, step 1 of the
+ * setup flow.
+ *
+ * Counted from the question table, not from a list. An exam with a generator
+ * pattern but no questions is offered as "coming soon" rather than as a choice
+ * that leads to an empty picker, and an exam with questions but no pattern can
+ * still be sat as a previous year paper.
+ */
+export const listExams = async (_req, res) => {
+  try {
+    const grouped = await prisma.previousYearQuestion.groupBy({
+      by: ["examCode"],
+      where: DRAWABLE,
+      _count: { _all: true },
+    });
+    const held = new Map(grouped.map((g) => [g.examCode, g._count._all]));
+
+    const papers = await prisma.pyqPaper.groupBy({
+      by: ["examCode"],
+      where: { isPublished: true },
+      _count: { _all: true },
+    });
+    const paperCount = new Map(papers.map((p) => [p.examCode, p._count._all]));
+
+    const codes = new Set([...held.keys(), ...Object.keys(PYQ_EXAMS)]);
+    const data = [...codes]
+      .map((code) => ({
+        examCode: code,
+        label: PYQ_EXAMS[code]?.label || code,
+        slug: PYQ_EXAMS[code]?.slug ?? null,
+        questions: held.get(code) ?? 0,
+        papers: paperCount.get(code) ?? 0,
+        // Whether a MOCK can be generated for it. Sitting a real paper needs
+        // only questions; generating one needs a pattern to shape it.
+        canGenerate: Boolean(GENERATOR_PATTERNS[code]) && (held.get(code) ?? 0) > 0,
+        canSitPapers: (paperCount.get(code) ?? 0) > 0,
+      }))
+      .sort((a, b) => b.questions - a.questions || a.label.localeCompare(b.label));
+
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+/**
+ * Which filters apply to one exam, and what each is worth — step 3.
+ *
+ * The whole point is that this is DERIVED. JEE Main has sessions and shifts;
+ * GATE has neither and is one sitting a year; JEE Advanced has Paper 1 and
+ * Paper 2. Hardcoding that per exam means every new exam needs a code change
+ * and every stale entry offers a filter that matches nothing — so the answer is
+ * simply whichever facets this exam's rows actually carry.
+ *
+ * Any filter already chosen can be passed in, and the counts come back narrowed
+ * to it, so "Physical Metallurgy (48)" means 48 given everything else picked.
+ */
+export const getExamFilters = async (req, res) => {
+  try {
+    const examCode = resolvePyqExamCode(req.query.examCode || req.params.examCode);
+    if (!examCode) {
+      return res.status(404).json({ error: "No previous year questions for this exam", canRequest: true });
+    }
+    const scope = normalizeSpec(req.query);
+    const facets = await examFacets(prisma, examCode, scope);
+    const pattern = GENERATOR_PATTERNS[examCode] ?? null;
+
+    res.json({
+      success: true,
+      data: {
+        examCode,
+        label: PYQ_EXAMS[examCode]?.label || examCode,
+        ...facets,
+        canGenerate: Boolean(pattern) && facets.total > 0,
+        pattern: pattern && {
+          subjects: pattern.subjects,
+          sectionA: pattern.sectionA,
+          sectionB: pattern.sectionB,
+          sectionBAttemptLimit: pattern.sectionBAttemptLimit,
+          durationMinutes: pattern.durationMinutes,
+          marksCorrect: pattern.marksCorrect,
+          marksIncorrect: pattern.marksIncorrect,
+          fullLength: pattern.subjects.length * (pattern.sectionA + pattern.sectionB),
+        },
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+/**
+ * How many questions a filter selection actually matches — step 4.
+ *
+ * Asked before anything is generated so the candidate is told "56 available,
+ * you asked for 100" instead of being handed a short paper, or a padded one.
+ */
+export const countAvailable = async (req, res) => {
+  try {
+    const spec = normalizeSpec({ ...req.query, ...req.body });
+    const examCode = resolvePyqExamCode(spec.examCode);
+    if (!examCode) return res.status(400).json({ error: "examCode is required" });
+
+    const where = buildQuestionWhere({ ...spec, examCode });
+    const [available, bySubject, byType] = await Promise.all([
+      prisma.previousYearQuestion.count({ where }),
+      prisma.previousYearQuestion.groupBy({ by: ["subject"], where, _count: { _all: true } }),
+      prisma.previousYearQuestion.groupBy({ by: ["questionType"], where, _count: { _all: true } }),
+    ]);
+
+    const asked = spec.totalQuestions;
+    const marks = await prisma.previousYearQuestion.aggregate({ where, _sum: { marksCorrect: true } });
+
+    res.json({
+      success: true,
+      data: {
+        examCode,
+        available,
+        requested: asked,
+        // The one thing the preview exists to say. Left explicit rather than
+        // implied by the numbers so the UI cannot get the comparison backwards.
+        enough: asked ? available >= asked : true,
+        shortBy: asked && available < asked ? asked - available : 0,
+        bySubject: bySubject.map((s) => ({ subject: s.subject, count: s._count._all })),
+        byType: byType.map((t) => ({ questionType: t.questionType, count: t._count._all })),
+        // Marks and minutes for the WHOLE matching pool; the UI scales them by
+        // how many questions are actually asked for.
+        totalMarksIfAll: marks._sum.marksCorrect ?? 0,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+/**
+ * Score an arbitrary set of questions — a generated paper.
  *
  * A generated paper has no PyqPaper row to score against, so the client sends
  * the ids it was served and the marking is done against those. The answer key
  * is still read from the database and never from the request — the client is
  * trusted for WHICH questions it saw, never for what the right answers were.
+ * For the same reason `totalMarks` is recomputed here rather than believed: it
+ * divides into the percentage that lands in the candidate's history.
  */
 export const scoreQuestionSet = async (req, res) => {
   try {
@@ -722,27 +813,302 @@ export const scoreQuestionSet = async (req, res) => {
 
     const rows = await prisma.previousYearQuestion.findMany({
       where: { id: { in: ids } },
-      select: {
-        id: true, subject: true, section: true, chapter: true, correctAnswer: true,
-        questionType: true, status: true, marksCorrect: true, marksIncorrect: true,
-        solution: true, solutionQuality: true, solutionImage: true,
-      },
+      // examCode and year are not used for marking; they are what lets the
+      // history row say which exam this paper was drawn from without trusting
+      // the client to say so.
+      select: { ...MARKING_SELECT, examCode: true, year: true },
     });
 
     // Preserve the order the candidate saw, which is what the Section B limit
     // and the review list are both indexed by.
     const byId = new Map(rows.map((r) => [r.id, r]));
     const ordered = ids.map((id) => byId.get(id)).filter(Boolean);
+    if (!ordered.length) return res.status(404).json({ error: "None of those questions exist" });
 
     const limit = Number(req.body?.sectionBAttemptLimit) || null;
+    const totalMarks = totalMarksFor(ordered, limit) ?? Number(req.body?.totalMarks) ?? null;
+    const timeTakenSeconds = Number(req.body?.timeTakenSeconds) || null;
+
     const result = markPaper(ordered, responses, {
-      totalMarks: Number(req.body?.totalMarks) || null,
+      totalMarks,
       sectionBAttemptLimit: limit,
       durationMinutes: Number(req.body?.durationMinutes) || null,
-      timeTakenSeconds: Number(req.body?.timeTakenSeconds) || null,
+      timeTakenSeconds,
     });
 
-    res.json({ success: true, data: { paperId: "practice", ...result } });
+    // A generated paper used to be scored and thrown away — the same bug real
+    // papers had, one flow later. It is a sitting like any other, so it is
+    // stored like any other, under its own kind.
+    const subjects = [...new Set(ordered.map((q) => q.subject))];
+    const examCode = ordered[0].examCode;
+    const attemptId = await recordAttempt(req.userId, {
+      kind: "generated",
+      paperId: "generated",
+      examCode,
+      examName: PYQ_EXAMS[examCode]?.label || examCode,
+      year: new Date().getFullYear(),
+      sessionLabel: null,
+      dateLabel: "Generated mock test",
+      shiftLabel: typeof req.body?.label === "string" ? req.body.label.slice(0, 120) : null,
+      subject: subjects.length === 1 ? subjects[0] : null,
+      totalMarks,
+      questionIds: ordered.map((q) => q.id),
+      responses,
+      timeTakenSeconds,
+      spec: req.body?.spec && typeof req.body.spec === "object" ? req.body.spec : undefined,
+      result,
+    });
+
+    res.json({
+      success: true,
+      data: {
+        paperId: "generated",
+        attemptId,
+        saved: Boolean(attemptId),
+        signedIn: Boolean(req.userId),
+        ...result,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+/**
+ * What the paper is out of, under its own Section B rule.
+ *
+ * JEE Main prints 10 numerical questions per subject and scores any 5, so a
+ * 90-question paper is out of 300 and not 360. Deriving it from the questions
+ * rather than accepting the client's number keeps the stored percentage honest.
+ */
+function totalMarksFor(questions, sectionBAttemptLimit) {
+  if (!questions.length) return null;
+  const perQuestion = questions[0].marksCorrect;
+  if (!Number.isFinite(perQuestion)) return null;
+
+  if (!sectionBAttemptLimit) {
+    return Math.round(questions.reduce((a, q) => a + (q.marksCorrect || 0), 0));
+  }
+
+  const subjects = [...new Set(questions.filter((q) => q.section === "B").map((q) => q.subject))];
+  const sectionA = questions.filter((q) => q.section !== "B");
+  return Math.round(
+    sectionA.reduce((a, q) => a + (q.marksCorrect || 0), 0) +
+      subjects.length * sectionBAttemptLimit * perQuestion
+  );
+}
+
+/* ────────────────────────── a candidate's history ──────────────────────────
+ *
+ * Every sitting on this site now lands in one of two places: a generated mock
+ * test and a real previous year paper are both PyqAttempt rows, told apart by
+ * `kind`, while the AI-written papers remain TestSessions because those own
+ * their questions. The two endpoints below serve the first pair; the profile
+ * endpoint stitches all three together.
+ */
+
+/** Columns the history list needs. `responses` is deliberately absent — it is
+ *  the biggest column on the row and nothing in a list renders it. */
+const ATTEMPT_LIST_SELECT = {
+  id: true, kind: true, paperId: true, examCode: true, examName: true, year: true,
+  label: true, sessionLabel: true, dateLabel: true, shiftLabel: true, subject: true,
+  score: true, totalMarks: true, percent: true, correct: true, wrong: true,
+  unattempted: true, totalQuestions: true, timeTakenSeconds: true, spec: true,
+  createdAt: true,
+};
+
+/** Below this many other candidates a percentile is noise, so none is shown. */
+const MIN_PEERS_FOR_PERCENTILE = 5;
+
+/**
+ * Where each attempt stands against everyone else who sat the same paper.
+ *
+ * Ranked on each USER'S BEST score, not on every row: a candidate who sits the
+ * same shift four times would otherwise occupy four of the places above you,
+ * and your rank would fall every time somebody else practised.
+ *
+ * Only real papers get this. Two generated papers are two different draws, so
+ * comparing their scores would be comparing different exams.
+ */
+async function percentilesFor(attempts) {
+  const paperIds = [...new Set(attempts.filter((a) => a.kind === "pyq").map((a) => a.paperId))];
+  if (!paperIds.length) return new Map();
+
+  const peers = await prisma.pyqAttempt.findMany({
+    where: { kind: "pyq", paperId: { in: paperIds } },
+    select: { paperId: true, userId: true, score: true },
+  });
+
+  // paperId -> userId -> best score
+  const best = new Map();
+  for (const p of peers) {
+    let byUser = best.get(p.paperId);
+    if (!byUser) best.set(p.paperId, (byUser = new Map()));
+    byUser.set(p.userId, Math.max(byUser.get(p.userId) ?? -Infinity, p.score));
+  }
+
+  const out = new Map();
+  for (const a of attempts) {
+    const byUser = best.get(a.paperId);
+    if (!byUser || byUser.size < MIN_PEERS_FOR_PERCENTILE) continue;
+
+    const scores = [...byUser.values()];
+    const below = scores.filter((s) => s < a.score).length;
+    out.set(a.id, {
+      // Share of candidates this attempt beat. The convention every exam board
+      // uses, and the reason a topper reads 100 rather than 99.9.
+      percentile: Math.round((below / scores.length) * 1000) / 10,
+      rank: scores.filter((s) => s > a.score).length + 1,
+      outOf: scores.length,
+    });
+  }
+  return out;
+}
+
+/** No history exists for a visitor with no account, and saying so beats an
+ *  empty list — which reads as "your attempts are gone". */
+const requireCandidate = (req, res) => {
+  if (req.userId) return true;
+  res.status(401).json({ error: "Sign in to see your test history.", signedIn: false });
+  return false;
+};
+
+/** GET /api/pyq/attempts — this candidate's sittings, newest first. */
+export const listMyAttempts = async (req, res) => {
+  try {
+    if (!requireCandidate(req, res)) return;
+    const kind = req.query.kind === "pyq" || req.query.kind === "generated" ? req.query.kind : null;
+
+    const attempts = await prisma.pyqAttempt.findMany({
+      where: { userId: req.userId, ...(kind ? { kind } : {}) },
+      orderBy: { createdAt: "desc" },
+      take: 200,
+      select: ATTEMPT_LIST_SELECT,
+    });
+
+    const standings = await percentilesFor(attempts);
+    res.json({
+      success: true,
+      data: attempts.map((a) => ({ ...a, ...(standings.get(a.id) ?? {}) })),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+/** Everything the review screen renders, plus everything markPaper reads. */
+const REVIEW_SELECT = {
+  ...MARKING_SELECT,
+  questionText: true,
+  optionA: true, optionB: true, optionC: true, optionD: true,
+  needsFigure: true,
+  diagramSvg: true,
+  diagramImage: true,
+  questionImage: true,
+  optionAImage: true, optionBImage: true, optionCImage: true, optionDImage: true,
+  sourceUrl: true,
+  year: true,
+};
+
+/**
+ * GET /api/pyq/attempts/:attemptId — one saved sitting, reopened in full.
+ *
+ * The result is re-marked from the stored responses rather than read back from
+ * the stored totals. Both are kept, and they agree, but the breakdown — which
+ * question, what you put, what the key said, the worked solution — was never
+ * stored per question and does not need to be: the responses plus the archive
+ * reconstruct it exactly, through the same markPaper the submission used.
+ */
+export const getMyAttempt = async (req, res) => {
+  try {
+    if (!requireCandidate(req, res)) return;
+    const attempt = await prisma.pyqAttempt.findUnique({ where: { id: req.params.attemptId } });
+    // 404 rather than 403 for someone else's attempt: whether a given id exists
+    // is not this caller's business.
+    if (!attempt || attempt.userId !== req.userId) {
+      return res.status(404).json({ error: "Attempt not found" });
+    }
+
+    let paper = null;
+    let questions = [];
+
+    if (attempt.kind === "pyq") {
+      paper = await prisma.pyqPaper.findUnique({ where: { id: attempt.paperId } });
+      questions = await prisma.previousYearQuestion.findMany({
+        where: { paperId: attempt.paperId },
+        orderBy: { paperQuestionNumber: "asc" },
+        select: REVIEW_SELECT,
+      });
+    } else {
+      // A generated paper exists only as the draw that produced it, so its
+      // question set comes off the attempt and is re-ordered to match. findMany
+      // returns rows in whatever order the planner likes, and the Section B
+      // limit is decided in paper order — marking an unordered set would score
+      // a different paper than the candidate sat.
+      const rows = await prisma.previousYearQuestion.findMany({
+        where: { id: { in: attempt.questionIds } },
+        select: REVIEW_SELECT,
+      });
+      const byId = new Map(rows.map((r) => [r.id, r]));
+      questions = attempt.questionIds
+        .map((id, i) => {
+          const q = byId.get(id);
+          return q ? { ...q, paperQuestionNumber: i + 1 } : null;
+        })
+        .filter(Boolean);
+    }
+
+    if (!questions.length) {
+      return res.status(410).json({
+        error:
+          "The questions for this attempt are no longer in the archive, so it cannot be reopened.",
+      });
+    }
+
+    const sectionBAttemptLimit =
+      paper?.sectionBAttemptLimit ?? attempt.spec?.sectionBAttemptLimit ?? null;
+
+    const result = markPaper(questions, attempt.responses || {}, {
+      totalMarks: attempt.totalMarks,
+      sectionBAttemptLimit,
+      durationMinutes: paper?.durationMinutes ?? attempt.spec?.durationMinutes ?? null,
+      timeTakenSeconds: attempt.timeTakenSeconds,
+    });
+
+    const standings = await percentilesFor([attempt]);
+
+    res.json({
+      success: true,
+      data: {
+        attempt: {
+          ...attempt,
+          // Sent as its own field rather than folded into the attempt, so a
+          // client can tell "no percentile yet" from "percentile of zero".
+          ...(standings.get(attempt.id) ?? {}),
+        },
+        // Shaped exactly like the live player's paper so the review screen can
+        // render a saved sitting and a just-submitted one with one component.
+        paper: paper ?? {
+          id: attempt.paperId,
+          examCode: attempt.examCode,
+          examName: attempt.examName,
+          year: attempt.year,
+          dateLabel: attempt.dateLabel,
+          shiftLabel: attempt.shiftLabel,
+          sessionLabel: attempt.sessionLabel,
+          durationMinutes: attempt.spec?.durationMinutes ?? null,
+          totalQuestions: questions.length,
+          totalMarks: attempt.totalMarks,
+          sectionBAttemptLimit,
+          subjectCounts: questions.reduce((acc, q) => {
+            acc[q.subject] = (acc[q.subject] || 0) + 1;
+            return acc;
+          }, {}),
+        },
+        questions,
+        result,
+      },
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

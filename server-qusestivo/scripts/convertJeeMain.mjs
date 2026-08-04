@@ -667,6 +667,12 @@ async function main() {
             // section, so Section B's "7." is the SECOND time 7 appears.
             printedNumber: printedOf(r, d.kind),
             occurrence: d.kind === "allen" && r.section === "B" ? 2 : 1,
+            // Where the question sits in its SUBJECT, 1-30. The figure pass
+            // needs this because ALLEN's booklets do not all number the same
+            // way: 2022's restart at each section while 2023's run 61-90
+            // across the paper. It reads the base off the page and counts from
+            // there; `printedNumber` above stays as the fallback.
+            subjectNumber: r.questionNumber,
             baseName: r.figureBase,
             // A numerical question prints no options; looking for markers in
             // its stem would cut it in half at a stray "(1)".
@@ -679,12 +685,15 @@ async function main() {
 
         const lost = new Set(missing);
         for (const r of group) {
-          const printed = printedOf(r, d.kind);
-          if (lost.has(printed)) {
+          // By figureBase, not by printed number. ALLEN restarts its numbering
+          // at each section, so Section A question 7 and Section B question 7
+          // are both "7" — and keying on that handed ten questions per subject
+          // a picture of a different question.
+          if (lost.has(r.figureBase)) {
             figuresLost++;
             continue;
           }
-          const p = parts.get(printed);
+          const p = parts.get(r.figureBase);
           if (!p) continue;
           r.questionImage = p.stem ?? null;
           r.optionAImage = p.options?.A ?? null;

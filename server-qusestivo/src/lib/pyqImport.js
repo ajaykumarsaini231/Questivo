@@ -151,11 +151,17 @@ export function validatePyqRow(row, ctx = {}, index = 0) {
   // degraded but perfectly practisable question, and demanding A and B threw it
   // away. What actually has to hold is checked below: the correct option must
   // be present. A question whose KEY is missing is the unusable one.
-  if (
-    !optionless &&
-    !needsFigure &&
-    Object.values(opts).filter((o) => o && String(o).trim()).length < 2
-  ) {
+  // An option that arrives as a CROP counts. "Which of these graphs represents
+  // Griffith's criterion" has four options and no words in any of them, and
+  // counting only strings threw those questions out even when all four images
+  // were sitting right there on the row.
+  const optionImages = {
+    A: row.optionAImage, B: row.optionBImage, C: row.optionCImage, D: row.optionDImage,
+  };
+  const present = ["A", "B", "C", "D"].filter(
+    (L) => (opts[L] && String(opts[L]).trim()) || (optionImages[L] && String(optionImages[L]).trim())
+  );
+  if (!optionless && !needsFigure && present.length < 2) {
     return err(`${questionType} question needs at least two options`);
   }
 
@@ -165,26 +171,47 @@ export function validatePyqRow(row, ctx = {}, index = 0) {
   if (isBonus || needsReview) {
     correctAnswer = null;
   } else if (optionless) {
-    const num = correctAnswer.match(/-?\d+(?:\.\d+)?/);
-    if (!num) return err(`${questionType} answer "${correctAnswer}" is not a number`);
-    if (questionType === "integer" && !/^-?\d+$/.test(num[0])) {
-      return err(`integer answer "${num[0]}" is not a whole number`);
+    // GATE keys a numerical answer as a RANGE — "0.14 to 0.16", or "15 to 15"
+    // when it is exact — because how far the candidate rounded the intermediate
+    // steps changes the last digit. Taking the first number out of it, which is
+    // what this did, stores 0.14 and marks everyone who answered 0.15 wrong.
+    // A key may also offer alternatives: "0.14 to 0.16 or 14 to 16", where the
+    // board accepted the fraction and the percentage. Kept whole; scored by
+    // numericallyEqual() in pyqController.js.
+    const RANGE = /^-?[\d.]+\s*(?:to|–|—)\s*-?[\d.]+(?:\s+or\s+-?[\d.]+\s*(?:to|–|—)\s*-?[\d.]+)*$/i;
+    if (RANGE.test(correctAnswer)) {
+      if (questionType === "integer" && /\./.test(correctAnswer)) {
+        return err(`integer answer "${correctAnswer}" is not a whole number`);
+      }
+      correctAnswer = correctAnswer.replace(/\s+/g, " ").toLowerCase();
+    } else {
+      const num = correctAnswer.match(/-?\d+(?:\.\d+)?/);
+      if (!num) return err(`${questionType} answer "${correctAnswer}" is not a number`);
+      if (questionType === "integer" && !/^-?\d+$/.test(num[0])) {
+        return err(`integer answer "${num[0]}" is not a whole number`);
+      }
+      correctAnswer = num[0];
     }
-    correctAnswer = num[0];
   } else if (questionType === "mcq_multiple") {
     const letters = [...new Set(correctAnswer.match(/[A-D]/g) || [])].sort();
     if (!letters.length) return err(`correctAnswer "${correctAnswer}" has no option letters`);
-    for (const l of letters) {
-      if (!opts[l]) return err(`correctAnswer names ${l} but option${l} is empty`);
+    // Same exemption the single-choice branch already makes below: when the
+    // choices are drawn rather than written there is no string for the key to
+    // point at, and demanding one rejected the question outright.
+    if (!needsFigure) {
+      for (const l of letters) {
+        if (!present.includes(l)) return err(`correctAnswer names ${l} but option${l} is empty`);
+      }
     }
     correctAnswer = letters.join(",");
   } else {
     const m = correctAnswer.match(/\b([A-D])\b/);
     if (!m) return err(`correctAnswer "${correctAnswer}" is not A, B, C or D`);
     correctAnswer = m[1];
-    // The stated key must point at an option that actually exists — unless the
-    // options live in the figure, where there is no string to point at.
-    if (!needsFigure && !opts[correctAnswer]) {
+    // The stated key must point at an option that actually exists — as text or
+    // as a crop — unless the options live in the figure, where there is no
+    // string to point at.
+    if (!needsFigure && !present.includes(correctAnswer)) {
       return err(`correctAnswer is ${correctAnswer} but option${correctAnswer} is empty`);
     }
   }

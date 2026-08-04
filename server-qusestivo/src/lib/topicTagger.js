@@ -393,8 +393,84 @@ const NEET_BIOLOGY = {
   ],
 };
 
+/**
+ * GATE Metallurgical Engineering.
+ *
+ * The paper's own subject label is just "MT" — the key's Subject Name column
+ * holds GA or MT and nothing finer — so unlike JEE, where the subject is given
+ * and only the chapter has to be found, here the syllabus AREA has to be
+ * recovered from the question text as well. Unit names follow the tree in
+ * src/test/test_gate_mt.js so the two group together.
+ *
+ * Metallurgy's areas overlap more than a school syllabus does: diffusion is
+ * transport phenomena and also phase transformation, a phase diagram is
+ * thermodynamics and also physical metallurgy. Weight 3 is reserved for terms
+ * that belong to one area only — "Ellingham", "blast furnace", "Charpy" — and
+ * the tie rule in tagTopic leaves the genuinely ambiguous ones untagged.
+ */
+const GATE_METALLURGY = {
+  "Engineering Mathematics": [
+    [/\b(eigen ?value|eigen ?vector|determinant|matrix|matrices)\b/i, 3],
+    [/\b(laplace transform|fourier series|taylor series|maclaurin)\b/i, 3],
+    [/\b(bisection|newton[- ]raphson|secant method|simpson|trapezoidal)\b/i, 3],
+    [/\b(differential equation|ODE|PDE)\b/, 3],
+    [/\b(probability|standard deviation|poisson|binomial distribution|least squares)\b/i, 3],
+    [/\b(gradient|divergence|curl|stokes|green'?s theorem|gauss divergence)\b/i, 3],
+    [/\b(limit|derivative|integral|continuity|differentiab)/i, 1],
+  ],
+  "Thermodynamics and Rate Processes": [
+    [/\bellingham\b/i, 3],
+    [/\b(gibbs (free )?energy|helmholtz|chemical potential|maxwell relation)\b/i, 3],
+    [/\b(activity coefficient|regular solution|raoult|henry'?s law)\b/i, 3],
+    [/\b(nernst|pourbaix|electrode potential|electrochemical (cell|series))\b/i, 3],
+    [/\b(entropy|enthalpy)\b/i, 2],
+    [/\b(equilibrium constant|partial pressure|fugacity)\b/i, 2],
+    [/\b(phase rule|lever rule)\b/i, 2],
+  ],
+  "Transport Phenomena": [
+    [/\b(reynolds|nusselt|prandtl|sherwood|schmidt|grashof) number\b/i, 3],
+    [/\b(bernoulli|shell balance|hagen[- ]poiseuille|buckingham)\b/i, 3],
+    [/\b(stefan[- ]boltzmann|emissivity|radiative heat|forced convection|natural convection)\b/i, 3],
+    [/\b(fick'?s (first |second )?law|mass transfer coefficient)\b/i, 3],
+    [/\b(thermal conductivity|heat flux|conduction|convection)\b/i, 2],
+    [/\b(viscosity|laminar|turbulent|boundary layer)\b/i, 2],
+  ],
+  "Extractive Metallurgy": [
+    [/\b(blast furnace|converter|BOF|basic oxygen|cupola|tuyere|slag basicity)\b/i, 3],
+    [/\b(froth flotation|comminution|beneficiation|sintering of ore|pelletis|calcination|roasting)\b/i, 3],
+    [/\b(hall[- ]h[eé]roult|bayer process|leaching|electrowinning|electrorefining|cyanidation)\b/i, 3],
+    [/\b(matte|smelt|ladle|desulphuris|dephosphoris|deoxidat)/i, 3],
+    [/\b(ore|flux|slag|gangue)\b/i, 1],
+  ],
+  "Physical Metallurgy": [
+    [/\b(burgers vector|dislocation|stacking fault|grain boundary|twin(ning)?)\b/i, 3],
+    [/\b(martensit|bainit|pearlit|austenit|ferrite|cementite|TTT|CCT) /i, 3],
+    [/\b(nucleation and growth|spinodal|precipitation harden|age harden|recrystallis|recovery and growth)\b/i, 3],
+    [/\b(BCC|FCC|HCP|miller indices|bravais|x-?ray diffraction|bragg)\b/i, 3],
+    [/\b(vacanc|interstitial|substitutional|point defect)\b/i, 2],
+    [/\b(phase diagram|eutectic|eutectoid|peritectic eutectoid|invariant reaction)\b/i, 2],
+    [/\b(annealing|quench|temper|normalis)/i, 2],
+  ],
+  "Mechanical Metallurgy": [
+    [/\b(charpy|izod|fracture toughness|K ?IC|paris law|griffith)\b/i, 3],
+    [/\b(s-?n curve|fatigue (life|limit|strength)|creep (rate|rupture)|larson[- ]miller)\b/i, 3],
+    [/\b(true stress|engineering stress|strain harden|work harden|yield (strength|criterion)|von mises|tresca)\b/i, 3],
+    [/\b(hall[- ]petch|hardness (test|number)|brinell|vickers|rockwell)\b/i, 3],
+    [/\b(ductile[- ]brittle|necking|elongation|toughness)\b/i, 2],
+    [/\b(elastic modulus|young'?s modulus|poisson'?s ratio)\b/i, 2],
+  ],
+  "Manufacturing Processes": [
+    [/\b(sand cast|investment cast|die cast|riser|gating system|shrinkage cavity|chvorinov)\b/i, 3],
+    [/\b(rolling mill|forging|extrusion|wire drawing|deep drawing|sheet metal)\b/i, 3],
+    [/\b(arc welding|MIG|TIG|submerged arc|weld pool|heat affected zone|HAZ)\b/i, 3],
+    [/\b(powder metallurgy|sintering of (green|compact)|green compact)\b/i, 3],
+    [/\b(machining|turning|milling|tool wear|cutting speed)\b/i, 2],
+  ],
+};
+
 const TABLES = {
   "JEE_MAIN:Mathematics": JEE_MATHS,
+  "GATE_MT:Metallurgical Engineering": GATE_METALLURGY,
   "NEET:Physics": NEET_PHYSICS,
   "NEET:Chemistry": NEET_CHEMISTRY,
   "NEET:Biology": NEET_BIOLOGY,

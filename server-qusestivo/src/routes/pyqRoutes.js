@@ -10,10 +10,16 @@ import {
   listPyqPapers,
   getPyqPaper,
   scorePyqPaper,
-  generatePracticePaper,
+  generateMockPaper,
+  getGeneratorOptions,
   scoreQuestionSet,
+  listMyAttempts,
+  getMyAttempt,
   createCourseRequest,
   listCourseRequests,
+  listExams,
+  getExamFilters,
+  countAvailable,
 } from "../controllers/pyqController.js";
 
 const router = express.Router();
@@ -39,9 +45,45 @@ const requestLimiter = rateLimit({
   message: { error: "Too many course requests from this address." },
 });
 
+/**
+ * Generating a paper is several unindexed-by-difficulty pool reads. Cheap next
+ * to a model call, not free next to nothing, and nothing else here can be made
+ * to do work in a loop.
+ */
+const generateLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many papers generated. Please try again later." },
+});
+
 router.get("/coverage", getPyqCoverage);
 router.get("/topics/:examCode", getPyqTopics);
 router.get("/pattern/:examCode", getPyqPattern);
+
+// The guided setup flow: which exams exist, which filters that exam supports,
+// and how many questions the current selection actually matches. All three are
+// derived from the question table, so an exam added tomorrow appears without a
+// code change and no filter is ever offered that the archive cannot fill.
+// Declared before "/:id/solution" so none is matched as a question id.
+router.get("/exams", listExams);
+router.get("/filters", getExamFilters);
+router.get("/filters/:examCode", getExamFilters);
+router.get("/available", countAvailable);
+router.post("/available", countAvailable);
+
+// This candidate's own sittings — real papers and generated mocks alike.
+//
+// optionalAuth rather than `protect` so the 401 is a JSON body the history page
+// can read. `protect` throws an AppError, and with no error handler mounted in
+// server.js that reaches Express's default handler: the status is right but the
+// body is an HTML page, which a fetch().json() call turns into a parse error
+// instead of "sign in to see your history". The handlers below refuse an
+// anonymous caller explicitly. Declared before "/:id/solution" so "attempts" is
+// never matched as a question id.
+router.get("/attempts", optionalAuth, listMyAttempts);
+router.get("/attempts/:attemptId", optionalAuth, getMyAttempt);
 
 // Whole-paper archive. Declared before "/:id/solution" so "papers" is never
 // matched as a question id.
@@ -57,8 +99,16 @@ router.post("/papers/:paperId/score", optionalAuth, scorePyqPaper);
 
 // A fresh paper drawn from the question bank, and its scorer. Declared before
 // "/:id/solution" for the same reason as the routes above.
-router.get("/practice/generate", generatePracticePaper);
-router.post("/practice/score", scoreQuestionSet);
+//
+// The GET form is the original zero-argument draw and is kept because the
+// player still links to it; POST carries a full spec — subjects, chapters,
+// years, difficulty, distribution.
+router.get("/practice/generate", generateLimiter, generateMockPaper);
+router.get("/generate/options", getGeneratorOptions);
+router.post("/generate", generateLimiter, generateMockPaper);
+// optionalAuth for the same reason as the paper scorer: a signed-in candidate's
+// generated paper lands in their history, an anonymous one is still scored.
+router.post("/practice/score", optionalAuth, scoreQuestionSet);
 
 router.get("/", listPyqs);
 router.get("/:id/solution", solutionLimiter, getPyqSolution);

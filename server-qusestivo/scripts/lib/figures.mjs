@@ -39,6 +39,8 @@ import * as mupdf from "mupdf";
 const SCALE = 2;
 /** Trim the advertising footer off a crop. */
 const FOOTER_PT = 34;
+/** Skip the running header when a question continues onto the next page. */
+const HEADER_PT = 62;
 /** A crop shorter than this caught nothing useful. */
 const MIN_HEIGHT_PT = 12;
 /** Baselines within this are the same row of options. */
@@ -48,6 +50,37 @@ const PAD = 3;
 
 /** "(1)" / "(2)" ... or "(A)" / "(B)" ... at the start of a line or after space. */
 const OPTION_MARK = /(?:^|\s)\(\s*([1-4A-D])\s*\)/g;
+
+/**
+ * Lines that look like a question anchor but are not one.
+ *
+ * GATE heads each block with "Q.1 – Q.5 Carry ONE mark Each", which matches the
+ * question pattern exactly. Taken as question 1, every crop lands one question
+ * early — the stem of Q.1 becomes a picture of the section heading, and so on
+ * down the paper.
+ */
+const NOT_A_QUESTION = /^Q\s*\.\s*\d{1,3}\s*(?:[–—-]|to\b)\s*Q\s*\.\s*\d{1,3}/i;
+
+/** Questions per subject on a JEE Main paper: 20 in Section A, 10 in Section B. */
+const SUBJECT_SPAN = 30;
+
+/**
+ * The lowest number that starts a near-complete run of `span` consecutive ones.
+ *
+ * A booklet numbered 61..90 returns 61; one that restarts its numbering at each
+ * section has no such run and returns null. Two anchors are allowed to be
+ * missing, because a question whose number is drawn rather than typed leaves a
+ * hole in an otherwise perfect run and should not veto the detection.
+ */
+function contiguousBase(numbers, span) {
+  const set = new Set(numbers);
+  for (const base of [...set].sort((a, b) => a - b)) {
+    let found = 0;
+    for (let i = 0; i < span; i++) if (set.has(base + i)) found++;
+    if (found >= span - 2) return base;
+  }
+  return null;
+}
 
 /**
  * Everything structural on every page: question anchors, option markers, and
@@ -60,6 +93,8 @@ function structureOf(doc, pattern) {
   const stops = [];
   /** Where the worked solution starts. */
   const solutions = [];
+  /** "Choose the correct answer..." — the options begin after it. */
+  const instructions = [];
   /** Page and y of the first "SECTION-A" heading, if the file has one. */
   let paperStart = null;
 
@@ -86,10 +121,18 @@ function structureOf(doc, pattern) {
           paperStart = { page: p, y: b.y ?? 0 };
         }
 
+        // "Choose the correct answer from the options given below :" divides a
+        // statement-list question from its actual choices. Without it the
+        // option crops captured the numbered STATEMENTS — which also read
+        // (1)..(4) — and the four choices ended up as pictures of the premises.
+        if (/Choose the (?:correct|most appropriate|right)|from the options given below/i.test(text)) {
+          instructions.push(at);
+        }
+
         if (/^Sol\b\.?/i.test(text)) { solutions.push(at); stops.push(at); continue; }
         if (/^(Official\s*Ans|Allen\s*Ans)/i.test(text)) { stops.push(at); continue; }
 
-        const q = pattern.exec(text);
+        const q = NOT_A_QUESTION.test(text) ? null : pattern.exec(text);
         // A worked solution is full of lines that begin like a question number
         // — "0.02", "2.5 kg" — and each one became a false anchor. The nearest
         // one below a solution then became its end, so the crop stopped two
@@ -116,7 +159,7 @@ function structureOf(doc, pattern) {
   const afterStart = (a) =>
     !paperStart || a.page > paperStart.page || (a.page === paperStart.page && a.y >= paperStart.y);
 
-  return { questions: questions.filter(afterStart), options, stops, solutions };
+  return { questions: questions.filter(afterStart), options, stops, solutions, instructions };
 }
 
 /**
@@ -127,7 +170,7 @@ function structureOf(doc, pattern) {
  * 84 MB to a size a frontend `public/` folder can actually carry. At ~40,000
  * images across the archive that difference decides whether the site deploys.
  */
-function renderRect(page, rect, scale = SCALE) {
+function renderRectPixmap(page, rect, scale = SCALE) {
   const [x0, y0, x1, y1] = rect;
   const m = mupdf.Matrix.concat(mupdf.Matrix.translate(-x0, -y0), mupdf.Matrix.scale(scale, scale));
   const bbox = [0, 0, Math.ceil((x1 - x0) * scale), Math.ceil((y1 - y0) * scale)];
@@ -136,9 +179,58 @@ function renderRect(page, rect, scale = SCALE) {
   const dev = new mupdf.DrawDevice(mupdf.Matrix.identity, pix);
   page.run(dev, m);
   dev.close();
+  return pix;
+}
+
+function renderRect(page, rect, scale = SCALE) {
+  const pix = renderRectPixmap(page, rect, scale);
   const png = pix.asPNG();
   pix.destroy?.();
   return png;
+}
+
+/**
+ * Render several page regions as one tall image.
+ *
+ * A question that starts near the foot of a page finishes on the next one, and
+ * on these compilations it is routinely the OPTIONS that spill over — question
+ * 38 of 24 Jun 2022 Shift 1 has its stem and reaction scheme at the bottom of
+ * page 5 and all four structures at the top of page 6. A crop bounded by one
+ * page cannot show them, so the candidate got a question with four blank
+ * choices no matter how the band was measured.
+ *
+ * Each region is rendered on its own and the results are copied into one
+ * pixmap, rather than running both pages into a single device. Running them
+ * directly would work only without clipping, and page 5's footer would then
+ * print across the top of page 6's content.
+ */
+function renderSpan(regions, scale = SCALE) {
+  const pix = regions.map((r) => renderRectPixmap(r.page, r.rect, scale));
+  try {
+    const width = Math.max(...pix.map((p) => p.getWidth()));
+    const height = pix.reduce((a, p) => a + p.getHeight(), 0);
+    const out = new mupdf.Pixmap(mupdf.ColorSpace.DeviceGray, [0, 0, width, height], false);
+    out.clear(255);
+    const dst = out.getPixels();
+    const dstStride = out.getStride();
+
+    let top = 0;
+    for (const p of pix) {
+      const src = p.getPixels();
+      const srcStride = p.getStride();
+      const w = p.getWidth();
+      const h = p.getHeight();
+      for (let y = 0; y < h; y++) {
+        dst.set(src.subarray(y * srcStride, y * srcStride + w), (top + y) * dstStride);
+      }
+      top += h;
+    }
+    const png = out.asPNG();
+    out.destroy?.();
+    return png;
+  } finally {
+    for (const p of pix) p.destroy?.();
+  }
 }
 
 /**
@@ -151,6 +243,16 @@ function renderRect(page, rect, scale = SCALE) {
 function optionRects(marks, colX0, colX1, bottom) {
   if (!marks.length) return {};
 
+  // Which label set this paper uses, read from the page rather than assumed.
+  //
+  // It does not follow from the publisher: ALLEN's 2022 booklets print
+  // "(A) (B) (C) (D)" and its 2023 ones print "(1) (2) (3) (4)". Assuming
+  // letters for every ALLEN file found no markers at all in 2023 and silently
+  // dropped 2,687 option crops.
+  const numeric = marks.filter((m) => /[1-4]/.test(m.label)).length;
+  const alpha = marks.filter((m) => /[A-D]/.test(m.label)).length;
+  const labels = numeric >= alpha ? ["1", "2", "3", "4"] : ["A", "B", "C", "D"];
+
   // Group into rows by baseline.
   const rows = [];
   for (const m of [...marks].sort((a, b) => a.y - b.y || a.x - b.x)) {
@@ -159,6 +261,26 @@ function optionRects(marks, colX0, colX1, bottom) {
     else rows.push({ y: m.y, items: [m] });
   }
   for (const r of rows) r.items.sort((a, b) => a.x - b.x);
+
+  // Keep only the markers that are actually option labels.
+  //
+  // An option's own text contains markers — "(1) (1) and (4) only  (2) (1), (2)
+  // and (4) only" — and splitting at every one of them produced four-character
+  // slivers like ") (1),". The real labels are the ones that appear in reading
+  // order as 1, 2, 3, 4, so the scan takes the next EXPECTED label and skips
+  // everything else.
+  let want = 0;
+  for (const row of rows) {
+    row.items = row.items.filter((m) => {
+      if (want < labels.length && m.label === labels[want]) { want++; return true; }
+      return false;
+    });
+  }
+  // A row left with nothing is not a row of options.
+  const kept = rows.filter((r) => r.items.length);
+  rows.length = 0;
+  rows.push(...kept);
+  if (!rows.length) return {};
 
   const out = {};
   rows.forEach((row, ri) => {
@@ -187,7 +309,7 @@ function optionRects(marks, colX0, colX1, bottom) {
  *                wantOptions?:boolean, wantSolution?:boolean}>} o.wanted
  * @param {"mathongo"|"allen"} o.mode
  * @returns {{written:number, missing:number[],
- *            parts: Map<number,{stem?:string, options?:object, solution?:string}>}}
+ *            parts: Map<string,{stem?:string, options?:object, solution?:string, optionsInStem?:boolean}> keyed by baseName; missing holds baseNames}}
  */
 export function extractFigures({ pdfPath, outDir, wanted, mode }) {
   const parts = new Map();
@@ -195,9 +317,15 @@ export function extractFigures({ pdfPath, outDir, wanted, mode }) {
 
   const doc = mupdf.Document.openDocument(fs.readFileSync(pdfPath), "application/pdf");
 
-  // MathonGo prints "Q12."; ALLEN prints "12." at the head of its column.
-  const pattern = mode === "mathongo" ? /^Q\s*(\d{1,3})\s*\./ : /^(\d{1,3})\s*\./;
-  const { questions: anchors, options: optionMarks, stops, solutions } = structureOf(doc, pattern);
+  // MathonGo prints "Q12."; ALLEN prints "12." at the head of its column; GATE
+  // prints "Q.12" — the dot on the other side of the number, which neither of
+  // the other two patterns matches.
+  const pattern =
+    mode === "gate" ? /^Q\s*\.\s*(\d{1,3})\b/
+    : mode === "mathongo" ? /^Q\s*(\d{1,3})\s*\./
+    : /^(\d{1,3})\s*\./;
+  const { questions: anchors, options: optionMarks, stops, solutions, instructions } =
+    structureOf(doc, pattern);
 
   const byNumber = new Map();
   for (const a of anchors) {
@@ -205,17 +333,43 @@ export function extractFigures({ pdfPath, outDir, wanted, mode }) {
     byNumber.get(a.n).push(a);
   }
 
+  // ALLEN numbers its booklets two different ways and does not say which.
+  //
+  //   2022 booklets RESTART at each section — Section A runs 1..20 and Section
+  //        B runs 1..10, so "7." appears twice and the caller disambiguates
+  //        with `occurrence`.
+  //   2023 booklets number ABSOLUTELY across the whole paper — a Chemistry
+  //        booklet runs 61..90, Section A being 61..80 and Section B 81..90.
+  //
+  // Assuming the first convention lost every crop in 35 of the 48 files for
+  // 2023: the code asked for anchor "1" on a file whose lowest question is 61,
+  // found nothing, and reported 802 questions "not located" without any hint as
+  // to why. So the base is read off the page — the smallest number that starts
+  // a near-complete run of 30 — and questions are addressed from it.
+  const anchorBase = contiguousBase([...byNumber.keys()], SUBJECT_SPAN);
+
+  /** Where question `w` sits in this file, under whichever numbering it uses. */
+  const locate = (w) => {
+    if (anchorBase !== null && w.subjectNumber) {
+      const hit = byNumber.get(anchorBase + w.subjectNumber - 1);
+      if (hit) return hit[0];
+    }
+    const sightings = byNumber.get(w.printedNumber);
+    return sightings?.[(w.occurrence ?? 1) - 1];
+  };
+
   fs.mkdirSync(outDir, { recursive: true });
   let written = 0;
   const missing = [];
 
   for (const w of wanted) {
-    const sightings = byNumber.get(w.printedNumber);
-    const a = sightings?.[(w.occurrence ?? 1) - 1];
-    if (!a) { missing.push(w.printedNumber); continue; }
+    const a = locate(w);
+    if (!a) { missing.push(w.baseName); continue; }
 
     const page = doc.loadPage(a.page);
-    const twoUp = mode !== "mathongo";
+    // Only the ALLEN booklets are set two-up, with the worked solution printed
+    // beside the question. MathonGo and GATE both run one column down the page.
+    const twoUp = mode === "allen";
     const mid = a.pageW / 2;
     // ALLEN booklets are set two-up, so a crop spanning the page would carry
     // half of the worked solution printed beside the question.
@@ -237,12 +391,23 @@ export function extractFigures({ pdfPath, outDir, wanted, mode }) {
     const ends = [nextQ?.y, nextStop?.y].filter((v) => typeof v === "number");
     const bandBottom = ends.length ? Math.min(...ends) - 2 : a.pageH - FOOTER_PT;
     const bandTop = Math.max(0, a.y - PAD);
-    if (bandBottom - bandTop < MIN_HEIGHT_PT) { missing.push(w.printedNumber); continue; }
+    if (bandBottom - bandTop < MIN_HEIGHT_PT) { missing.push(w.baseName); continue; }
 
     const mine = { };
     const write = (name, rect) => {
       try {
         const png = renderRect(page, rect);
+        fs.writeFileSync(path.join(outDir, name), png);
+        written++;
+        return name;
+      } catch {
+        return null;
+      }
+    };
+    /** Write one image spanning this page and its continuation. */
+    const writeSpan = (name, rect, cont) => {
+      try {
+        const png = renderSpan([{ page, rect }, { page: cont.page, rect: cont.rect }]);
         fs.writeFileSync(path.join(outDir, name), png);
         written++;
         return name;
@@ -256,8 +421,15 @@ export function extractFigures({ pdfPath, outDir, wanted, mode }) {
     // hunting for markers in its stem would cut it in half at a stray "(1)".
     let optRects = {};
     if (w.wantOptions !== false) {
+      // Options begin after the instruction line when there is one, so the
+      // numbered statements above it are not mistaken for choices.
+      const instruction = instructions
+        .filter((o) => o.page === a.page && o.y >= a.y && o.y <= bandBottom && sameColumn(o))
+        .sort((p1, p2) => p1.y - p2.y)[0];
+      const optionsFrom = instruction ? instruction.y : a.y;
+
       const marks = optionMarks.filter(
-        (o) => o.page === a.page && o.y >= a.y && o.y <= bandBottom && sameColumn(o)
+        (o) => o.page === a.page && o.y >= optionsFrom && o.y <= bandBottom && sameColumn(o)
       );
       optRects = optionRects(marks, colX0, colX1, bandBottom);
     }
@@ -266,21 +438,96 @@ export function extractFigures({ pdfPath, outDir, wanted, mode }) {
       ? Math.min(...Object.values(optRects).map((r) => r[1]))
       : null;
 
+    // The question runs onto the next page, and what spilled over is the part
+    // that matters: a stem and its figure fill the rest of the page and the
+    // four choices start the following one. Question 38 of 24 Jun 2022 Shift 1
+    // is the case — reaction scheme at the foot of page 5, all four structures
+    // at the head of page 6 — and cropped to one page it is unanswerable.
+    //
+    // The test is deliberately narrow: OPTIONS ARE MISSING, not merely that the
+    // question is the last on its page. Half of every paper is the last
+    // question on some page, and stitching all of those on would have stapled
+    // the next question underneath 131 of GATE's 178 choice questions.
+    //
+    // Not attempted for the two-up booklets: there the right-hand column is the
+    // worked solution rather than a continuation, and the per-column logic
+    // already keeps a question whole.
+    // Where the text carries on after this region ends, in reading order: the
+    // right column of the same page for a two-up booklet's left column, else
+    // the top of the next page.
+    const nextRegion = () => {
+      if (twoUp && a.x < mid) return { pageIndex: a.page, x0: mid, x1: a.pageW - PAD };
+      if (a.page + 1 >= doc.countPages()) return null;
+      return twoUp
+        ? { pageIndex: a.page + 1, x0: 0, x1: mid }
+        : { pageIndex: a.page + 1, x0: colX0, x1: colX1 };
+    };
+
+    let continuation = null;
+    const optionsMissing = w.wantOptions !== false && Object.keys(optRects).length < 4;
+    if (optionsMissing && !ends.length) {
+      const region = nextRegion();
+      const inRegion = (o) => region && o.page === region.pageIndex && o.x >= region.x0 && o.x < region.x1;
+      const endsThere = [
+        ...anchors.filter(inRegion).map((o) => o.y),
+        ...stops.filter(inRegion).map((o) => o.y),
+      ];
+      const contBottom = endsThere.length ? Math.min(...endsThere) - 2 : a.pageH - FOOTER_PT;
+      // Nothing worth adding if the next question starts at the top of that
+      // region — then this one really did finish where its column did.
+      if (region && contBottom - HEADER_PT >= MIN_HEIGHT_PT) {
+        continuation = {
+          page: doc.loadPage(region.pageIndex),
+          rect: [region.x0, HEADER_PT, region.x1, contBottom],
+        };
+      }
+    }
+
     // ── stem ─────────────────────────────────────────────────────────────
     // Everything above the first option marker, so the picture of the question
     // is the question and nothing else.
-    const stemBottom = firstOptionY !== null ? firstOptionY - 1 : bandBottom;
-    if (stemBottom - bandTop >= MIN_HEIGHT_PT) {
+    //
+    // UNLESS the four options did not all come out. Cutting the stem above the
+    // options is only safe when the options survive somewhere else — and when a
+    // question draws its choices as figures with no "(A)" text beside them,
+    // nothing anchors them, no option crop is made, and the extracted option
+    // text is empty too. The candidate then gets a stem, four blank choices and
+    // no way to answer. 214 questions across 2022 and 2023 were in that state.
+    //
+    // So the rule is: the question image must always contain everything the
+    // paper printed for that question, minus whatever was successfully split
+    // out of it. Losing the split is survivable; losing the options is not.
+    const wantedOptions = w.wantOptions !== false;
+    // A question that runs onto the next page is never "complete" here, however
+    // many markers were found on this one: the rest of it is on a page these
+    // rectangles do not cover.
+    const complete = Object.keys(optRects).length === 4 && !continuation;
+    const stemBottom = firstOptionY !== null && (!wantedOptions || complete)
+      ? firstOptionY - 1
+      : bandBottom;
+    if (continuation) {
+      // Both pages, as one image, so nothing the paper printed is off the edge.
+      mine.stem = writeSpan(`${w.baseName}_Q.png`, [colX0, bandTop, colX1, bandBottom], continuation);
+    } else if (stemBottom - bandTop >= MIN_HEIGHT_PT) {
       mine.stem = write(`${w.baseName}_Q.png`, [colX0, bandTop, colX1, stemBottom]);
     } else {
       // The options start immediately: keep the whole band rather than nothing.
       mine.stem = write(`${w.baseName}_Q.png`, [colX0, bandTop, colX1, bandBottom]);
     }
 
-    for (const [letter, rect] of Object.entries(optRects)) {
-      const name = write(`${w.baseName}_${letter}.png`, rect);
-      if (name) (mine.options ||= {})[letter] = name;
+    // Partial crops are worse than none: three options beside a fourth blank
+    // row reads as though the paper printed three. The full stem above carries
+    // all four, so show that instead.
+    if (complete || !wantedOptions) {
+      for (const [letter, rect] of Object.entries(optRects)) {
+        const name = write(`${w.baseName}_${letter}.png`, rect);
+        if (name) (mine.options ||= {})[letter] = name;
+      }
     }
+    // Tell the caller whether the choices are inside the stem image, so a row
+    // can be marked and the UI can say "the choices are in the image" instead
+    // of "not readable".
+    mine.optionsInStem = wantedOptions && !complete;
 
     // ── solution ─────────────────────────────────────────────────────────
     if (w.wantSolution) {
@@ -295,7 +542,15 @@ export function extractFigures({ pdfPath, outDir, wanted, mode }) {
       }
     }
 
-    parts.set(w.printedNumber, mine);
+    // Keyed by base name, which is unique per question, NOT by printed number.
+    //
+    // ALLEN's 2022 booklets restart their numbering at each section, so both
+    // "7." in Section A and "7." in Section B ask for printed number 7 — the
+    // Section B entry overwrote the Section A one, and ten questions per
+    // subject per paper were then handed a picture of a different question.
+    // `occurrence` disambiguates which anchor to CROP; it did nothing about
+    // which slot the result was stored in.
+    parts.set(w.baseName, mine);
   }
 
   return { written, missing, parts };

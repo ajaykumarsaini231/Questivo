@@ -71,15 +71,20 @@ export const PYQ_EXAMS = {
   GATE_MT: {
     label: "GATE Metallurgical Engineering (MT)",
     slug: "gate-metallurgy",
-    subjects: [
-      "Thermodynamics and Rate Processes",
-      "Extractive Metallurgy",
-      "Physical Metallurgy",
-      "Mechanical Metallurgy",
-      "Manufacturing Processes",
-      "Engineering Mathematics",
-      "General Aptitude",
-    ],
+    // What the paper and the official key actually print. GATE's key has a
+    // "Subject Name" column and it holds exactly two values, GA and MT — the
+    // paper is 10 General Aptitude questions and 55 metallurgy ones, and it
+    // never says which branch of metallurgy a question belongs to.
+    //
+    // The syllabus areas — Physical Metallurgy, Extractive Metallurgy and the
+    // rest — used to be listed here, which meant no real GATE row could be
+    // imported: its subject is "MT", and every question was rejected against a
+    // list of names the source never uses. They are TOPICS, and live in
+    // topicTagger.js under GATE_MT:Metallurgical Engineering.
+    subjects: ["General Aptitude", "Metallurgical Engineering"],
+    // 10 of 65 questions, worth 15 of 100 marks — the marks split, since that
+    // is what a candidate is actually allocating time against.
+    paperShare: { "General Aptitude": 15, "Metallurgical Engineering": 85 },
   },
 };
 

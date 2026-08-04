@@ -585,8 +585,11 @@ async function main() {
 
         const lost = new Set(missing);
         for (const r of group) {
-          if (lost.has(r.printedNumber)) { figuresMissing.push(r.figureHint); continue; }
-          const p = parts.get(r.printedNumber);
+          // Keyed by figureBase — extractFigures stores parts under the base
+          // name because a printed number is not unique in a booklet that
+          // restarts its numbering at each section.
+          if (lost.has(r.figureBase)) { figuresMissing.push(r.figureHint); continue; }
+          const p = parts.get(r.figureBase);
           if (!p) continue;
           r.questionImage = p.stem ?? null;
           r.optionAImage = p.options?.A ?? null;
