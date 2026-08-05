@@ -117,8 +117,15 @@ const STRIP = [
   /^\s*Page\s+\d+\s+of\s+\d+\s*$/gim,
 ];
 
-/** A line that is nothing but an option marker — the choice itself is a figure. */
-const BARE_OPTION = /^\(\s*[A-D]\s*\)\s*$/;
+/**
+ * A line that BEGINS with an option marker.
+ *
+ * Used to refuse the borrow below. The test used to be that the line was
+ * nothing BUT a marker, which covers a figure-option but not "(D) decrease in
+ * entropy" — so a question whose number sat alone annexed the previous
+ * question's last choice, losing it from one and prefixing the other.
+ */
+const STARTS_OPTION = /^\(\s*[A-D]\s*\)/;
 
 /**
  * Every question in one GATE paper.
@@ -168,7 +175,11 @@ export function parseGatePaper(lines) {
     s.from = s.line;
     if (s.rest || s.line === 0) continue;
     const above = clean[s.line - 1];
-    if (!above || BARE_OPTION.test(above) || QUESTION.test(above)) continue;
+    if (!above || STARTS_OPTION.test(above) || QUESTION.test(above)) continue;
+    // A completed sentence above a bare question number belongs to the
+    // question before it. A wrapped opening clause — the case this exists for —
+    // runs on into the line below and does not end in a full stop.
+    if (/[.?:;]\s*$/.test(above)) continue;
     s.rest = above;
     s.from = s.line - 1;
   }

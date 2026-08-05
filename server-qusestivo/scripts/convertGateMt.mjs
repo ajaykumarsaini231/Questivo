@@ -296,6 +296,18 @@ async function main() {
       continue;
     }
 
+    // A multiple-choice stem this short did not survive extraction whole.
+    //
+    // "Among the following options," and "The most effective" are real examples:
+    // the question continues in the page's other column and the reading order
+    // cut it there. The words that are left are not wrong, they are a fragment,
+    // and a fragment reads as a complete question that makes no sense. The crop
+    // has the whole thing, so the flag points the UI at it.
+    if (r.questionType !== "numerical" && String(r.questionText || "").trim().length < 40) {
+      flag("stem truncated by the page's column layout");
+      continue;
+    }
+
     if (r.questionType === "numerical") continue;
     const withText = ["A", "B", "C", "D"].filter((L) => String(r[`option${L}`] || "").trim());
     const withCrop = ["A", "B", "C", "D"].filter((L) => r[`option${L}Image`]);
