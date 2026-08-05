@@ -266,7 +266,13 @@ for (const r of rows) {
   if (topic) stats.tagged++;
   else if (t) stats.tagRejected++;
 
-  const session = paper ? `Paper ${paper}` : null;
+  // Named the way the ALLEN converter names its sittings, because the two
+  // write into the same archive and the browse screen groups by this string.
+  // "Paper 1" alone put eight different years under a chip reading "Paper 1"
+  // and another eight under "Paper 2" — sixteen sittings the operator could
+  // not tell apart, beside the ALLEN ones which say which year they are.
+  const session = paper ? `JEE Advanced ${year} · Paper ${paper}` : null;
+  const sessionLabel = paper ? `Paper ${paper}` : null;
   stats.byPaper[session || "unknown"] = (stats.byPaper[session || "unknown"] || 0) + 1;
   stats.byType[mark.questionType] = (stats.byType[mark.questionType] || 0) + 1;
   stats.byYear[year] = (stats.byYear[year] || 0) + 1;
@@ -276,6 +282,7 @@ for (const r of rows) {
     topic: topic || undefined,
     year,
     session,
+    sessionLabel,
     questionText,
     ...(optionless
       ? {}

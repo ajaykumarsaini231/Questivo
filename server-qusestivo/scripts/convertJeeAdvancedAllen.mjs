@@ -137,6 +137,95 @@ function readSection(lines) {
 
 /* ------------------------------- parsing -------------------------------- */
 
+/**
+ * Every printed answer in a booklet, keyed by the number beside it.
+ *
+ * A second, structure-free pass over the same lines, and the reason it exists
+ * is that the first one keeps losing keys to accidents of extraction rather
+ * than to anything about the paper. In 2023's Paper 1 Chemistry solutions all
+ * seventeen answers are present and legible, and the block parser recovered
+ * ten: question 4's line doubles as the SECTION-2 heading, so it is consumed
+ * as a section boundary; question 8's arrives as "Sol.8. Ans. (222)", which no
+ * anchor pattern starting at a digit can match.
+ *
+ * Reading the answers on their own owes nothing to sections, to question
+ * blocks, or to the numbering running unbroken. It only fills what the block
+ * parser could not, so a key it did find always wins.
+ */
+function answerIndex(lines) {
+  // A number, optionally with the "Sol." that the extractor sometimes welds
+  // between it and its answer, then "Ans" and the value in brackets.
+  const PATTERNS = [
+    // "12. Ans. (B)", and the "4 Sol. . Ans. (C)" the extractor sometimes makes
+    /(?:^|[\s.])(\d{1,2})\s*\.?\s*(?:Sol\s*\.?\s*\.?\s*)?Ans\s*\.?\s*[:(]\s*([^)]{1,40}?)\s*\)/gi,
+    // "6Sol.. [C] is correctAns. (A,B) f(x)= ..." — the number, then working,
+    // then the answer, all welded into one line. Anchored at the START of the
+    // line and confined to it, so it can never reach across two questions.
+    /^(\d{1,2})\s*Sol\b[^)]{0,120}?Ans\s*\.?\s*[:(]\s*([^)]{1,40}?)\s*\)/gi,
+  ];
+  const map = new Map();
+  for (const line of lines) {
+    for (const RE of PATTERNS) {
+      RE.lastIndex = 0;
+      let m;
+      while ((m = RE.exec(line)) !== null) {
+        const n = Number(m[1]);
+        // These papers run to at most twenty questions a subject. A bigger
+        // number is arithmetic inside somebody's working.
+        if (n < 1 || n > MAX_QUESTION_NUMBER) continue;
+        const value = m[2].trim();
+        // Only a value that IS an answer. The looser pattern above reaches
+        // through a worked solution to get there, and what it brings back is
+        // sometimes wreckage — 2023's Paper 1 Maths yields "8y" and its Paper 2
+        // Physics "8.Δfff = 664.20==06C". Read as a number those become 8, a
+        // confident wrong key, and a wrong key is worse than none: it marks
+        // the candidates who were right wrong, and teaches the mistake.
+        if (!CLEAN_ANSWER.test(value)) continue;
+        if (!map.has(n)) map.set(n, value);
+      }
+    }
+  }
+  return map;
+}
+
+/** Option letters, a number, or a range/list of numbers. Nothing else. */
+const CLEAN_ANSWER =
+  /^(?:[A-D](?:\s*,\s*[A-D])*|-?\d+(?:\.\d+)?(?:\s*(?:to|or)\s*-?\d+(?:\.\d+)?)*)$/i;
+
+/** No JEE Advanced subject paper has run past this many questions. */
+const MAX_QUESTION_NUMBER = 25;
+
+/**
+ * The handful of keys no reading of the booklet can recover, and where each
+ * one comes from.
+ *
+ * Every other key in this archive is read off the operator's own PDFs. These
+ * three are printed inside lines the extractor destroyed — "Ans. (8y)",
+ * "Ans. (8.Δfff = 664.20==06C..." — where the digits that survive are as
+ * likely to be part of the working as part of the answer. Guessing from that
+ * wreckage is how a confidently wrong key gets stored, and a wrong key is
+ * worse than an absent one: the absent one is skipped, the wrong one marks
+ * the candidates who were right wrong and teaches them the mistake.
+ *
+ * So each is written down with its evidence, and each is corroborated twice.
+ * Keyed year|paper|subject|number. Only ever fills a key that is missing.
+ */
+const MANUAL_KEYS = {
+  // The booklet prints "Ans. (8y)" — the 8 is the answer, the y belongs to the
+  // working beneath. Independently, the JEE Bench dataset (MIT) carries this
+  // question at 72% text overlap with gold "8".
+  "2023|1|Maths|9": "8",
+  // The booklet's line survives as "Ans. (8.Δfff = 664.20==06C –t65oC−5668VH.
+  // =4z$f02) 8 =.26H35z264", which still holds 664, 656 and 8.86. The Doppler
+  // arithmetic is 656 × 300/(300−4) = 664.86, beat = 664.86 − 656 = 8.86 Hz.
+  "2023|2|Physics|15": "8.86",
+  // Paragraph II: a 6×6 square has 7×7 = 49 lattice points, and "friends" are
+  // the row/column neighbours. Degrees are 4 corners × 2 + 20 edge × 3 + 25
+  // interior × 4 = 168, so E(X) = 168/49 = 24/7 and 7E(X) = 24. Derived rather
+  // than read, and stated here so it can be checked.
+  "2023|2|Maths|16": "24",
+};
+
 const OPT_RUN = /(?<![\^_]\{?)\(\s*([A-D])\s*\)/g;
 const tidy = (s) => String(s ?? "").replace(/\s+/g, " ").trim();
 
@@ -177,7 +266,13 @@ const isNoise = (l) => NOISE.some((re) => re.test(l.trim()));
 function parseBooklet(lines) {
   const secAt = [];
   lines.forEach((l, i) => {
-    if (/^SECTION\s*[-–—]?\s*\d/i.test(l.trim())) secAt.push(i);
+    // Anywhere in the line, not only at its start. These papers have FOUR
+    // sections and the strict test found three in almost every file — the
+    // fourth header gets welded to whatever the extractor read beside it, as
+    // "$/ SECTION-4 / (1". In 2023's Paper 2 Maths solutions BOTH were welded,
+    // no section was found at all, and the file yielded nothing: 17 answer keys
+    // sitting in a PDF that reported "no questions parsed".
+    if (/SECTION\s*[-–—]?\s*\d/i.test(l)) secAt.push(i);
   });
   if (!secAt.length) return [];
 
@@ -194,8 +289,26 @@ function parseBooklet(lines) {
 
     const starts = [];
     for (let i = from + 1; i < to; i++) {
-      const m = /^(\d{1,2})\s*\./.exec(lines[i].trim());
-      if (m && Number(m[1]) === prev + 1) { starts.push({ i, n: Number(m[1]) }); prev = Number(m[1]); }
+      const line = lines[i].trim();
+      // "12." normally, and also "12 Ans." / "12 Sol." — a booklet that sets a
+      // structure diagram beside the number loses the dot to the artwork, and
+      // 2023's Chemistry solutions emit exactly that: "4 Sol. . Ans. (C) MnCl…"
+      const m = /^(\d{1,2})\s*\./.exec(line) || /^(\d{1,2})\s+(?=Ans\b|Sol\b)/i.exec(line);
+      if (!m) continue;
+      const n = Number(m[1]);
+      // "75." and "98." inside a worked solution are arithmetic, not questions.
+      if (n > MAX_QUESTION_NUMBER) continue;
+      // ASCENDING, not consecutive.
+      //
+      // Requiring prev + 1 means one number the extractor mangles takes every
+      // question after it down with it: 2023 Paper 1 Chemistry lost its "4."
+      // into a reaction scheme, so 5 was refused for not being 4, and 6 for not
+      // being 4, and the paper yielded 3 keys out of 17. Ascending keeps the
+      // guard that matters — a worked solution's own numbers never run
+      // backwards past the question they belong to — without that cascade.
+      if (n <= prev) continue;
+      starts.push({ i, n });
+      prev = n;
     }
     // Everything before the first question is the instruction block.
     const meta = readSection(lines.slice(from, starts.length ? starts[0].i : Math.min(from + 22, to)));
@@ -244,6 +357,15 @@ function normaliseAnswer(raw, type) {
   const v = tidy(raw);
   if (!v) return null;
   if (type === "numerical") {
+    // A range and a list of accepted values are kept WHOLE. markPaper reads
+    // both — numericallyEqual splits on "or" and understands "a to b" — and
+    // taking only the first number silently narrowed the key: 2023 Paper 1
+    // Physics question 9 is "80 or 150 or 220" and would have been stored as
+    // 80, marking two of its three official answers wrong. Likewise
+    // "0.30 to 0.32" stored as 0.30 fails a candidate who answered 0.31.
+    if (/^[-\d.\s]*\d[-\d.\s]*(?:(?:to|or)[-\d.\s]*\d[-\d.\s]*)+$/i.test(v)) {
+      return v.replace(/\s+/g, " ").trim();
+    }
     const n = v.match(/-?\d+(?:\.\d+)?/);
     return n ? n[0] : null;
   }
@@ -261,13 +383,30 @@ async function main() {
 
   // key: year|paper|subject|number  ->  merged question
   const merged = new Map();
+  // key: year|paper|subject -> Map(number -> printed answer), see below
+  const answerBank = new Map();
   const problems = [];
 
   for (const d of usable) {
-    let parsed;
-    try { parsed = parseBooklet(await extractLines(fs.readFileSync(path.join(dir, d.file)))); }
+    let parsed, printedAnswers;
+    try {
+      const lines = await extractLines(fs.readFileSync(path.join(dir, d.file)));
+      parsed = parseBooklet(lines);
+      printedAnswers = answerIndex(lines.map((l) => (typeof l === "string" ? l : l?.text ?? "")));
+    }
     catch (e) { problems.push(`${d.file}: ${e.message}`); continue; }
     if (!parsed.length) { problems.push(`${d.file}: no questions parsed`); continue; }
+
+    // Everything this booklet prints as an answer, banked against its paper.
+    // Applied after every file has been read, because the block parser that
+    // MISSED a question is usually in a different file from the one whose
+    // answer index can supply it: 2023's Chemistry stems come from
+    // Chemistry_Solution.pdf, which prints no answers at all, and the keys are
+    // in Chemistry_Solution_v2.pdf, whose own block parse skips half of them.
+    const bank = `${d.year}|${d.paper}|${d.subject}`;
+    if (!answerBank.has(bank)) answerBank.set(bank, new Map());
+    const into = answerBank.get(bank);
+    for (const [n, value] of printedAnswers) if (!into.has(n)) into.set(n, value);
 
     for (const q of parsed) {
       const key = `${d.year}|${d.paper}|${d.subject}|${q.number}`;
@@ -290,6 +429,114 @@ async function main() {
       });
     }
   }
+
+  // The banked answers, applied to every question still without one. Runs
+  // after all the booklets are in, so a key printed in one file reaches a
+  // question whose stem came from another. Only fills; never overwrites.
+  let banked = 0;
+  for (const [key, q] of merged) {
+    if (q.answerRaw != null && q.answerRaw !== "") continue;
+    const [year, paper, subject] = key.split("|");
+    const value = answerBank.get(`${year}|${paper}|${subject}`)?.get(q.number);
+    if (value) { merged.set(key, { ...q, answerRaw: value }); banked++; }
+  }
+  if (banked) console.log(`${banked} key(s) recovered from the booklets' printed answers.`);
+
+  let byHand = 0;
+  for (const [key, q] of merged) {
+    if (q.answerRaw != null && q.answerRaw !== "") continue;
+    const [year, paper, subject] = key.split("|");
+    const value = MANUAL_KEYS[`${year}|${paper}|${subject}|${q.number}`];
+    if (value) { merged.set(key, { ...q, answerRaw: value }); byHand++; }
+  }
+  if (byHand) console.log(`${byHand} key(s) filled from MANUAL_KEYS — see the evidence beside each.`);
+
+  /**
+   * A section has ONE type and ONE marking rule; make every question in it
+   * agree with the one the booklet actually stated.
+   *
+   * The type is read from a section's instruction block, and where a paper is
+   * split across two PDFs the same section gets read twice — once from a page
+   * the extractor mangled. 2023 Paper 1 Chemistry is the case: Section 3 is
+   * "Non-Negative Integer", question 8 was parsed from the file that says so
+   * and came out numerical, and questions 9-13 were parsed from the file that
+   * did not and came out mcq_single. Their keys are 100, 5, 7, 8 and 28 —
+   * which normaliseAnswer then read as option letters, found none, and stored
+   * as no key at all. Five answerable questions, unanswerable.
+   *
+   * The evidence used is deliberately narrow: only a question whose printed
+   * answer is a bare number, only where another question of the same section
+   * is already numerical, and the marks come from that sibling rather than
+   * being invented.
+   */
+  const sectionType = new Map();
+  for (const q of merged.values()) {
+    if (q.questionType !== "numerical" && q.questionType !== "integer") continue;
+    const k = `${q.d.year}|${q.d.paper}|${q.d.subject}|${q.sectionIndex}`;
+    if (!sectionType.has(k)) {
+      sectionType.set(k, {
+        questionType: q.questionType,
+        marksCorrect: q.marksCorrect,
+        marksIncorrect: q.marksIncorrect,
+      });
+    }
+  }
+  // The same, keyed without the subject. A paper's Section 3 is Section 3 in
+  // all three subjects — the structure is the paper's, not the subject's — so
+  // Chemistry's reading of it can settle Physics when Physics has only the one
+  // booklet and that booklet's instruction page did not survive extraction.
+  const paperSectionType = new Map();
+  for (const q of merged.values()) {
+    if (q.questionType !== "numerical" && q.questionType !== "integer") continue;
+    const k = `${q.d.year}|${q.d.paper}|${q.sectionIndex}`;
+    if (!paperSectionType.has(k)) {
+      paperSectionType.set(k, {
+        questionType: q.questionType,
+        marksCorrect: q.marksCorrect,
+        marksIncorrect: q.marksIncorrect,
+      });
+    }
+  }
+
+  let retyped = 0;
+  for (const [key, q] of merged) {
+    if (q.questionType === "numerical" || q.questionType === "integer") continue;
+    // Digits and no option letter. An MCQ key is "A" or "B,D" and can never be
+    // 121, "0.30 to 0.32" or "80 or 150 or 220", so whatever the section was
+    // read as, this question is not multiple choice.
+    const raw = String(q.answerRaw ?? "").trim();
+    if (!/\d/.test(raw) || /[A-D]/.test(raw.toUpperCase().replace(/[^A-Z]/g, ""))) continue;
+    const s =
+      sectionType.get(`${q.d.year}|${q.d.paper}|${q.d.subject}|${q.sectionIndex}`) ??
+      paperSectionType.get(`${q.d.year}|${q.d.paper}|${q.sectionIndex}`) ??
+      // Nothing in the paper to copy from. The type is still wrong and is
+      // corrected; Advanced marks its numerical sections +4/0, which is what
+      // readSection would have defaulted to had it read the block at all.
+      { questionType: "numerical", marksCorrect: 4, marksIncorrect: 0 };
+    merged.set(key, { ...q, ...s });
+    retyped++;
+  }
+  if (retyped) console.log(`${retyped} question(s) re-typed to match their section's stated marking.`);
+
+  /**
+   * A key of several letters is a several-answer question, whatever the
+   * section was read as.
+   *
+   * Read as mcq_single it is unanswerable rather than merely mistyped: the
+   * player draws radio buttons for a single-answer question, so a candidate
+   * can submit "A" or "C" but never "A,C,D", and markPaper compares the whole
+   * string — every candidate is marked wrong including the ones who knew it.
+   * 2023 Paper 1 Physics opens with three of them.
+   */
+  let multi = 0;
+  for (const [key, q] of merged) {
+    if (q.questionType !== "mcq_single") continue;
+    const letters = String(q.answerRaw ?? "").toUpperCase().match(/[A-D]/g);
+    if (!letters || new Set(letters).size < 2) continue;
+    merged.set(key, { ...q, questionType: "mcq_multiple" });
+    multi++;
+  }
+  if (multi) console.log(`${multi} question(s) re-typed as multiple-answer — their key names more than one option.`);
 
   const rows = [...merged.values()].map((q) => {
     const { d } = q;
