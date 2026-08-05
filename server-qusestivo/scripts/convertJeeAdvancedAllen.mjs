@@ -89,6 +89,15 @@ const BASE = (args.base && args.base !== true ? String(args.base) : "").replace(
 
 const SUBJ = { physics: "Physics", chemistry: "Chemistry", maths: "Maths", mathematics: "Maths" };
 
+/**
+ * The token used in filenames → the subject name the archive stores.
+ *
+ * Kept apart deliberately. "Maths" is baked into every crop already committed
+ * and served, and renaming 300-odd files to fix a label would break every URL
+ * in the database for the sake of a word.
+ */
+const SUBJECT_NAME = { Maths: "Mathematics" };
+
 function describe(file) {
   // JEEAdv_2023_Paper1_04-Jun_Physics_Solution.pdf
   const m = /^JEEAdv_(\d{4})_Paper([12X])_(?:(\d{2})-([A-Za-z]{3})_)?(.+?)_(Solution|Paper|AnswerKey)(?:_v\d+)?\.pdf$/i.exec(file);
@@ -556,7 +565,14 @@ async function main() {
       paperId,
       session: `${EXAM_NAME} ${d.year} · Paper ${d.paper}`,
 
-      subject: d.subject, subjectId: slug(d.subject),
+      // The name the archive uses, which is not the token in the filenames.
+      // pyqPattern.js lists JEE Advanced's subjects as Physics / Chemistry /
+      // Mathematics, and the importer rejects anything else — 137 rows, every
+      // Maths question of every year, were refused on exactly this. The crops
+      // keep saying "Maths" because that is what is written on 300-odd files
+      // already published to the CDN, and a subject name is not a filename.
+      subject: SUBJECT_NAME[d.subject] ?? d.subject,
+      subjectId: slug(SUBJECT_NAME[d.subject] ?? d.subject),
       topic: null, chapter: null, chapterId: null,
 
       section: String(q.sectionIndex),
@@ -705,6 +721,36 @@ async function main() {
       if (r.questionImage) r.diagramImage ||= r.questionImage;
     }
   }
+
+  /**
+   * A stem too thin to import, replaced by a citation of where it came from.
+   *
+   * These booklets set some questions entirely as artwork — a reaction scheme,
+   * a circuit, a match table — and what the text layer yields is "Zn, dil. HCl"
+   * or nothing. The picture IS the question and the candidate sees it whole,
+   * but the row still has to be identifiable in a list, in a search result and
+   * to the importer's minimum-length check, none of which look at the figure:
+   * 25 rows were being refused as "questionText missing or too short" with
+   * their questions sitting complete in the crop beside them.
+   *
+   * The same citation the JEE Main converters write, so the player's
+   * isPlaceholderStem hides it for both. Only ever applied where a crop
+   * actually exists, and questionHash for a stem this short is already keyed
+   * to the paper coordinates rather than the words, so rewriting it cannot
+   * move the upsert key or duplicate the row.
+   */
+  let cited = 0;
+  for (const r of rows) {
+    if (!r.questionImage) continue;
+    if (tidy(r.questionText).length >= 25) continue;
+    const tail = tidy(r.questionText);
+    r.questionText =
+      `[Shown as an image] ${r.examName} ${r.year} · ${r.sessionLabel} · ` +
+      `${r.subject} Q${r.questionNumber} (Section ${r.section})` +
+      (tail ? ` — ${tail}` : "");
+    cited++;
+  }
+  if (cited) console.log(`${cited} stem(s) too thin to stand alone now cite their paper.`);
 
   rows.forEach((r) => { delete r.__printed; delete r.__sources; });
   fs.mkdirSync(path.dirname(OUT), { recursive: true });
