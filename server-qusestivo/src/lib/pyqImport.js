@@ -161,7 +161,24 @@ export function validatePyqRow(row, ctx = {}, index = 0) {
   const present = ["A", "B", "C", "D"].filter(
     (L) => (opts[L] && String(opts[L]).trim()) || (optionImages[L] && String(optionImages[L]).trim())
   );
-  if (!optionless && !needsFigure && present.length < 2) {
+  /**
+   * The choices can also live INSIDE the stem's own crop.
+   *
+   * Where a booklet sets a whole question — stem and all four options — as one
+   * block of vector outlines, there is nothing to anchor a per-option cut on,
+   * so the cutter produces a single questionImage that contains the options and
+   * no _A.._D crops at all. 128 of the 350 JEE Advanced questions are like
+   * this, and they were being rejected as "needs at least two options" while
+   * their options sat on screen in the picture.
+   *
+   * The renderer already handles it — an option with neither text nor crop
+   * reads "choice (A) is in the question image above" — so the row is complete
+   * as far as a candidate is concerned. What must still hold is the key, which
+   * is checked immediately below and is the thing that actually makes a
+   * question unusable.
+   */
+  const optionsInStem = Boolean(row.questionImage && String(row.questionImage).trim());
+  if (!optionless && !needsFigure && !optionsInStem && present.length < 2) {
     return err(`${questionType} question needs at least two options`);
   }
 
@@ -218,7 +235,9 @@ export function validatePyqRow(row, ctx = {}, index = 0) {
     // Same exemption the single-choice branch already makes below: when the
     // choices are drawn rather than written there is no string for the key to
     // point at, and demanding one rejected the question outright.
-    if (!needsFigure) {
+    // Also exempt when the choices live inside the stem crop — same reason as
+    // the option-count check above: there is no string for the key to name.
+    if (!needsFigure && !optionsInStem) {
       for (const l of letters) {
         if (!present.includes(l)) return err(`correctAnswer names ${l} but option${l} is empty`);
       }
@@ -231,7 +250,7 @@ export function validatePyqRow(row, ctx = {}, index = 0) {
     // The stated key must point at an option that actually exists — as text or
     // as a crop — unless the options live in the figure, where there is no
     // string to point at.
-    if (!needsFigure && !present.includes(correctAnswer)) {
+    if (!needsFigure && !optionsInStem && !present.includes(correctAnswer)) {
       return err(`correctAnswer is ${correctAnswer} but option${correctAnswer} is empty`);
     }
   }
