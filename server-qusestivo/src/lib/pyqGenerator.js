@@ -196,6 +196,18 @@ export async function generatePaper(spec = {}) {
   const warnings = [];
   /** Ids already placed, so no paper can ask the same question twice. */
   const used = new Set();
+  /**
+   * Must the paper be exactly the length asked for?
+   *
+   * Only for a full-length mock, which claims to reproduce the board's own
+   * pattern — 75 questions, 25 per subject — and is not that if it is short. A
+   * chapter drill or a filtered practice set has no such claim to keep: it is
+   * as long as the archive can make it, which is the honest answer to "give me
+   * questions on this chapter".
+   */
+  const exact = spec.exact === true || spec.mode === "full";
+  /** Slots the archive could not fill, so the paper can say how short it is. */
+  const shortfall = [];
   let ratedDrawn = 0;
   let paperNumber = 0;
 
@@ -204,29 +216,42 @@ export async function generatePaper(spec = {}) {
       const want = plan[subject]?.[section] ?? 0;
       if (!want) continue;
 
-      // THE POOL IS THE FILTER.
+      // THE POOL IS THE FILTER — but a short pool is a SHORT PAPER, not an
+      // error.
       //
-      // This used to widen: when the chosen chapters held fewer questions than
-      // the paper needed it silently redrew from the WHOLE SUBJECT and added a
-      // warning. A candidate revising Phase Diagrams then sat a paper of
-      // general metallurgy — not a narrower version of what they asked for, a
-      // different paper, and one whose score means nothing against the topic
-      // they were testing themselves on.
+      // Two different rules got conflated here, and only one of them is right.
       //
-      // Too few questions is now reported as too few. The candidate can widen
-      // the years, the chapters or the length, and only they can decide which.
+      // The rule that matters: nothing from outside the selection may enter the
+      // paper. This used to widen — when the chosen chapters held too few it
+      // redrew from the WHOLE SUBJECT — so a candidate revising phase diagrams
+      // sat a paper of general metallurgy. That is not a narrower version of
+      // what they asked for, and its score means nothing against the topic they
+      // were testing themselves on. That widening is gone and stays gone.
+      //
+      // The rule that was wrong: refusing to build anything when the pool is
+      // smaller than the requested length. A chapter with 12 drawable questions
+      // asked for 17 got an error page. Twelve questions on the right chapter is
+      // a perfectly good paper — it is exactly what the candidate asked for,
+      // just as long as the archive can make it. Serve what exists and say so.
+      //
+      // A full-length paper is the exception: it claims to reproduce the board's
+      // own pattern, and a short one does not. `exact` holds it to that.
       const pool = await drawPool(filters, subject, section);
+      const take = exact ? want : Math.min(want, pool.length);
 
       if (pool.length < want) {
-        const err = new Error(
-          `Not enough ${subject}${section ? ` Section ${section}` : ""} questions matching your ` +
-            `filters to build this paper (${pool.length} available, ${want} needed). ` +
-            `Widen the years or chapters, or ask for fewer questions.`
-        );
-        err.status = 409;
-        err.available = pool.length;
-        err.needed = want;
-        throw err;
+        if (exact) {
+          const err = new Error(
+            `Not enough ${subject}${section ? ` Section ${section}` : ""} questions matching your ` +
+              `filters to build this paper (${pool.length} available, ${want} needed). ` +
+              `Widen the years or chapters, or ask for fewer questions.`
+          );
+          err.status = 409;
+          err.available = pool.length;
+          err.needed = want;
+          throw err;
+        }
+        shortfall.push({ subject, section, wanted: want, available: pool.length });
       }
 
       // Shuffle first so the draw is random, then let difficulty reorder it —
@@ -234,7 +259,7 @@ export async function generatePaper(spec = {}) {
       const ranked = rankByDifficulty(shuffle(pool), index, difficulty);
       let placed = 0;
       for (const q of ranked.pool) {
-        if (placed >= want) break;
+        if (placed >= take) break;
         // A question can satisfy two draws — Section A matches rows whose
         // section is null, which is every GATE and NEET row — and the same
         // question appearing twice in one paper is a bug the candidate sees.
@@ -258,7 +283,10 @@ export async function generatePaper(spec = {}) {
           measuredDifficulty: index.get(q.id) ?? null,
         });
       }
-      if (placed < want) {
+      // Fewer placed than the pool held means duplicates were skipped — a
+      // question can satisfy both the Section A and the Section B draw when its
+      // section is null. Only an exact paper treats that as a failure.
+      if (placed < take && exact) {
         const err = new Error(
           `Not enough distinct ${subject} questions matching your filters ` +
             `(${placed} could be placed, ${want} needed).`
@@ -269,10 +297,30 @@ export async function generatePaper(spec = {}) {
     }
   }
 
+  // Nothing at all is still an error: there is no paper to sit, and silently
+  // returning an empty one would send the candidate into the player with a
+  // palette of zero questions.
   if (!questions.length) {
-    const err = new Error("The question bank has nothing matching that request yet.");
+    const err = new Error(
+      "No questions match those filters yet. Try a different chapter, or widen the years."
+    );
     err.status = 409;
+    err.available = 0;
     throw err;
+  }
+
+  // Say it plainly rather than letting the candidate count the palette. A
+  // 12-question paper when 17 were asked for is the right paper at the length
+  // the archive can manage, and the one thing that would make it feel broken is
+  // not being told.
+  if (shortfall.length) {
+    const asked = shortfall.reduce((a, s) => a + s.wanted, 0);
+    const got = shortfall.reduce((a, s) => a + s.available, 0);
+    warnings.push(
+      `This paper has ${questions.length} question${questions.length === 1 ? "" : "s"} rather than ` +
+        `the ${questions.length + asked - got} asked for — that is every question in the archive ` +
+        `matching your filters. Nothing outside them was substituted in.`
+    );
   }
 
   if (difficulty !== "mixed" && ratedDrawn < questions.length / 2) {

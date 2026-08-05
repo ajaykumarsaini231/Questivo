@@ -168,9 +168,21 @@ export const getPyqTopics = async (req, res) => {
       return res.status(404).json({ error: "No previous year questions for this exam", canRequest: true });
     }
 
+    // Counted the way the DRAW counts, not the way the table does.
+    //
+    // These numbers are on a button that sits a paper on the chapter, so they
+    // have to be the questions a paper can actually be built from — keyed,
+    // scoreable, readable. Counting every row instead advertised a chapter of
+    // 26 whose drawable pool was 2, and the candidate got an error page where
+    // they expected a test.
+    //
+    // needsFigure rows are the gap: real questions whose text did not survive
+    // extraction. They are still worth reading in the list below, which is why
+    // they are counted into `untagged`-style totals, but they cannot carry a
+    // scored paper.
     const grouped = await prisma.previousYearQuestion.groupBy({
       by: ["subject", "topic"],
-      where: { examCode, topic: { not: null } },
+      where: { examCode, topic: { not: null }, needsFigure: false, ...DRAWABLE },
       _count: { _all: true },
     });
 

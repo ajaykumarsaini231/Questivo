@@ -75,6 +75,8 @@ export default function PyqPaperRunner() {
    *  so the history row can say which paper it was. Null for a real shift,
    *  which is identified by its own date and shift instead. */
   const [spec, setSpec] = useState<Record<string, unknown> | undefined>();
+  /** Anything the generator wants to say about the paper it built. */
+  const [notes, setNotes] = useState<string[]>([]);
 
   const [started, setStarted] = useState(false);
   const [index, setIndex] = useState(0);
@@ -129,6 +131,11 @@ export default function PyqPaperRunner() {
         setPaper(p);
         setQuestions(qs);
         setSpec("spec" in data ? (data.spec as Record<string, unknown>) : undefined);
+        // A drawn paper can come back shorter than asked for, when the chapter
+        // simply has fewer questions than that. Shown on the start screen: the
+        // one thing that would make a 17-question paper feel broken is the
+        // candidate counting the palette and working it out for themselves.
+        setNotes(("warnings" in data && (data.warnings as string[])) || []);
         setRemaining(p.durationMinutes * 60);
       })
       .catch((e) => {
@@ -345,6 +352,7 @@ export default function PyqPaperRunner() {
       <Instructions
         paper={paper}
         questions={questions}
+        notes={notes}
         onStart={async () => {
           // Requested from the click itself: browsers only grant fullscreen
           // inside a user gesture, so it cannot be moved into an effect.
@@ -781,11 +789,14 @@ function FigureNotice({ q }: { q: PyqPaperQuestion }) {
 function Instructions({
   paper,
   questions,
+  notes = [],
   onStart,
   onBack,
 }: {
   paper: PyqPaperMeta;
   questions: PyqPaperQuestion[];
+  /** What the generator wants to say about the paper it built. */
+  notes?: string[];
   onStart: () => void;
   onBack: () => void;
 }) {
@@ -801,6 +812,19 @@ function Instructions({
         <p className="mt-2 text-center text-slate-600">
           {paper.examName} · {paper.dateLabel} · {paper.shiftLabel}
         </p>
+
+        {/* Said before the paper starts, not discovered from the palette. A
+            chapter drill is as long as the chapter allows, and a candidate who
+            asked for 25 and got 17 should be told why by the page rather than
+            left to count. */}
+        {notes.map((n) => (
+          <p
+            key={n}
+            className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-900"
+          >
+            {n}
+          </p>
+        ))}
 
         <div className="mt-6 grid gap-3 sm:grid-cols-3">
           <Stat label="Duration" value={`${paper.durationMinutes} min`} />
