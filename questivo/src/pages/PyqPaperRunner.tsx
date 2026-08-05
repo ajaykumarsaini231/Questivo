@@ -26,7 +26,7 @@ import PyqResultView, { Stat } from "../componenets/PyqResultView";
 import PremiumDialog from "../componenets/PremiumDialog";
 import { useExamLock } from "../lib/useExamLock";
 import { hhmmss } from "../lib/pyqHistory";
-import { PREMIUM_UNLOCKED } from "../lib/premium";
+import { usePremiumGate } from "../lib/premium";
 import {
   fetchPyqPaper,
   generatePracticePaper,
@@ -96,16 +96,19 @@ export default function PyqPaperRunner() {
   const isPractice = paperId === "practice" || paperId === "generated";
 
   /**
-   * A generated paper is the premium feature, so the free build answers the
-   * request with the upgrade dialog rather than a paper.
+   * Whether drawing a paper from the bank is currently a paid feature.
    *
-   * Checked here as well as on the buttons that link here: gating only the
-   * menu entry would leave /pyq/practice reachable by typing it, and a paywall
-   * you can walk around by editing the address bar is not one. The API stays
-   * open — entitlement needs a plan on the user record, which does not exist
-   * yet — so this is a promotion gate in the same sense as lib/featureFlags.ts.
+   * Asked of the server rather than read from a constant, so the operator can
+   * move the line without redeploying the site and this screen can never
+   * disagree with what the API would serve.
+   *
+   * Checked here as well as on the buttons that link here: gating only the menu
+   * entry would leave /pyq/practice reachable by typing it. It defaults to open
+   * until the server answers — an API that is down must not make the site look
+   * as though it has been put behind a paywall.
    */
-  const premiumBlocked = isPractice && !PREMIUM_UNLOCKED;
+  const mockGate = usePremiumGate("mockGeneration");
+  const premiumBlocked = isPractice && mockGate.premium;
 
   // The filter selection the setup flow arrived with, as it was encoded there.
   // Carried through untouched — this page does not get to reinterpret it, and
@@ -811,9 +814,17 @@ function Instructions({
             countdown in the top right shows the time remaining; when it reaches zero the paper
             submits itself.
           </li>
+          {/* The two-section sentence used to be unconditional, so a NEET
+              paper — 180 single-correct questions and no sections at all —
+              told the candidate to expect a numerical Section B that does not
+              exist in that exam. Read off the paper actually in hand. */}
           <li>
-            The paper has {subjects.map(([s, n]) => `${s} (${n})`).join(", ")}. Each subject has
-            Section A (multiple choice) and Section B (numerical).
+            The paper has {subjects.map(([s, n]) => `${s} (${n})`).join(", ")}.
+            {questions.some((q) => q.section === "B")
+              ? " Each subject has Section A (multiple choice) and Section B (numerical)."
+              : questions.every((q) => q.questionType === "mcq_single")
+                ? " Every question is multiple choice with one correct answer."
+                : ""}
           </li>
           <li>
             Marking: <strong>+{paper.marksCorrect}</strong> for a correct answer,{" "}

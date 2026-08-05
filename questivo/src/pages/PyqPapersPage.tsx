@@ -15,7 +15,9 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { PREMIUM_UNLOCKED } from "../lib/premium";
+import PremiumDialog from "../componenets/PremiumDialog";
+import { usePremiumGate } from "../lib/premium";
+import { useAudience } from "../componenets/AudienceProvider";
 import {
   fetchPyqPapers,
   type PyqPaperExam,
@@ -72,6 +74,7 @@ export default function PyqPapersPage() {
   const [error, setError] = useState<string | null>(null);
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
+  const { visibleExams, lockedToTrack } = useAudience();
 
   // The selection lives in the URL so a chosen shift can be linked and shared.
   const examCode = params.get("exam") || "";
@@ -97,9 +100,38 @@ export default function PyqPapersPage() {
     return () => ac.abort();
   }, []);
 
+  /**
+   * The archive, narrowed to the candidate's track.
+   *
+   * THIS PAGE WAS THE HOLE.
+   *
+   * Every other listing — the home page, the exam directory, the generator's
+   * dropdown — filters by track, but this one rendered whatever /api/pyq/papers
+   * returned. So a JEE aspirant opened Previous Year Papers and was offered
+   * GATE Metallurgical Engineering, which is the exact thing the track exists
+   * to stop.
+   *
+   * Matched on `pyqExamCode` rather than by comparing names: the archive calls
+   * it "JEE_MAIN" and lib/exams.ts calls it "NTA_JEE_MAIN_2025", and fuzzy
+   * string matching between those two vocabularies is how the wrong exam gets
+   * through.
+   *
+   * An untracked visitor (and an admin) still sees everything — `visibleExams`
+   * is already the full list for them.
+   */
+  const listedExams = useMemo(() => {
+    if (!exams) return null;
+    const allowed = new Set(visibleExams.map((e) => e.pyqExamCode).filter(Boolean));
+    if (!allowed.size) return exams;
+    const narrowed = exams.filter((e) => allowed.has(e.examCode));
+    // Never narrow to nothing: a track whose exams have no papers stored yet
+    // would otherwise render an empty page with no explanation. Handled below.
+    return narrowed;
+  }, [exams, visibleExams]);
+
   const exam = useMemo(
-    () => exams?.find((e) => e.examCode === examCode) ?? exams?.[0] ?? null,
-    [exams, examCode]
+    () => listedExams?.find((e) => e.examCode === examCode) ?? listedExams?.[0] ?? null,
+    [listedExams, examCode]
   );
   const yearRow = useMemo(
     () => exam?.years.find((y) => y.year === year) ?? exam?.years[0] ?? null,
@@ -136,17 +168,39 @@ export default function PyqPapersPage() {
     );
   }
 
-  if (!exams.length || !exam) {
+  if (!listedExams?.length || !exam) {
+    // Two different empty states. "Nothing published at all" and "nothing
+    // published FOR YOUR EXAMS" look identical to a candidate and need
+    // different answers — the second is a real gap in the archive for their
+    // track, and telling them so beats an unexplained blank page.
+    const narrowedAway = Boolean(exams.length) && lockedToTrack;
     return (
       <Shell>
         <div className={`${CARD} p-8 text-center`}>
-          <p className="font-medium text-slate-800">No papers published yet.</p>
+          <p className="font-medium text-slate-800">
+            {narrowedAway
+              ? "No full papers stored for your exams yet."
+              : "No papers published yet."}
+          </p>
           <p className="mt-2 text-sm text-slate-500">
-            Papers appear here once they have been released. Meanwhile you can{" "}
-            <Link to="/GenerateTestPage" className="text-indigo-600 underline">
-              generate a practice paper
-            </Link>
-            .
+            {narrowedAway ? (
+              <>
+                We hold previous year questions for your exams, but not yet grouped into
+                complete sittings you can attempt end to end. In the meantime you can{" "}
+                <Link to="/pyq/setup" className="text-indigo-600 underline">
+                  build a paper from them
+                </Link>
+                .
+              </>
+            ) : (
+              <>
+                Papers appear here once they have been released. Meanwhile you can{" "}
+                <Link to="/pyq/setup" className="text-indigo-600 underline">
+                  generate a practice paper
+                </Link>
+                .
+              </>
+            )}
           </p>
         </div>
       </Shell>
@@ -158,7 +212,7 @@ export default function PyqPapersPage() {
       <div className={`${CARD} p-6 sm:p-8`}>
         <ChoiceRow
           label="Exam"
-          items={exams}
+          items={listedExams}
           isSelected={(e) => e.examCode === exam.examCode}
           onSelect={(e) => set({ exam: e.examCode, year: null, session: null })}
           render={(e) => e.label}
@@ -267,9 +321,25 @@ function PaperCard({ paper, onStart }: { paper: PyqPaperSummary; onStart: () => 
  * and metered. A candidate picking between them is really picking between
  * "authentic" and "unlimited".
  */
+/** The chip that marks a paid entry. One definition, so the two agree. */
+function PremiumBadge() {
+  return (
+    <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-800">
+      Premium
+    </span>
+  );
+}
+
 function GeneratePaperButton() {
   const [open, setOpen] = useState(false);
+  const [upgrade, setUpgrade] = useState<string | null>(null);
   const navigate = useNavigate();
+
+  // Which of the two is paid comes from the server, so the operator can move
+  // the line without a redeploy and the badge can never disagree with what the
+  // API will actually serve.
+  const aiGate = usePremiumGate("aiGeneration");
+  const mockGate = usePremiumGate("mockGeneration");
 
   /**
    * Opens the setup screen, where the candidate chooses exam, subjects,
@@ -314,11 +384,7 @@ function GeneratePaperButton() {
             >
               <p className="flex items-center gap-2 font-semibold text-slate-900">
                 Generate Mock Test
-                {!PREMIUM_UNLOCKED && (
-                  <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-800">
-                    Premium
-                  </span>
-                )}
+                {mockGate.premium && <PremiumBadge />}
               </p>
               <p className="mt-1 text-sm text-slate-600">
                 A balanced paper in the real pattern, drawn from questions that were actually
@@ -328,11 +394,19 @@ function GeneratePaperButton() {
             <button
               onClick={() => {
                 setOpen(false);
-                navigate("/GenerateTestPage");
+                // The model writes these, and it is metered per paper — so the
+                // dialog opens here rather than the page, and the API refuses
+                // it too. Which of the two entries is paid is the operator's
+                // switch, read from /api/features; neither is hardcoded.
+                if (aiGate.premium) setUpgrade(aiGate.reason);
+                else navigate("/GenerateTestPage");
               }}
               className="block w-full p-4 text-left transition hover:bg-indigo-50"
             >
-              <p className="font-semibold text-slate-900">Written by AI</p>
+              <p className="flex items-center gap-2 font-semibold text-slate-900">
+                Written by AI
+                {aiGate.premium && <PremiumBadge />}
+              </p>
               <p className="mt-1 text-sm text-slate-600">
                 New questions in the official pattern. Slower, and uses generation credits.
               </p>
@@ -340,6 +414,12 @@ function GeneratePaperButton() {
           </div>
         </>
       )}
+
+      <PremiumDialog
+        open={upgrade !== null}
+        onClose={() => setUpgrade(null)}
+        feature="Papers written by AI"
+      />
     </div>
   );
 }

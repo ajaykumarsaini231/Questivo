@@ -192,8 +192,14 @@ interface Props {
   onGenerate: () => void;
   /** Starts a mock test assembled from the stored questions. Costs nothing. */
   onPyqTest?: () => void;
-  /** Generate an AI practice set weighted to one chapter. Costs model credits. */
-  onGenerateChapter?: (topic: string, subject: string) => void;
+  /**
+   * Sit one chapter as a paper, in the exam player.
+   *
+   * Was `onGenerateChapter`, which wrote a fresh set with the model. Clicking a
+   * chapter should test you on what was actually examined in it; the AI writer
+   * is still reachable from the "Generate a paper" menu.
+   */
+  onPractiseChapter?: (topic: string, subject: string, available: number) => void;
   /**
    * Reports how many previous year questions this exam actually has, so the
    * page around this section can drop its own AI buttons when the free option
@@ -207,7 +213,7 @@ const PyqSection: React.FC<Props> = ({
   examShortName,
   onGenerate,
   onPyqTest,
-  onGenerateChapter,
+  onPractiseChapter,
   onCount,
 }) => {
   const [coverage, setCoverage] = useState<PyqCoverage | null>(null);
@@ -381,7 +387,7 @@ const PyqSection: React.FC<Props> = ({
             listTop.current?.scrollIntoView({ behavior: "smooth", block: "start" });
           })
         }
-        onGenerateChapter={onGenerateChapter}
+        onPractiseChapter={onPractiseChapter}
       />
 
       <div ref={listTop} />

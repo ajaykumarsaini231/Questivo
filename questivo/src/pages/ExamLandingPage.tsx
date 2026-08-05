@@ -81,15 +81,43 @@ const ExamLandingPage: React.FC = () => {
   // opens on the right one instead of the visitor having to find the selector.
   const start = () =>
     navigate("/GenerateTestPage", { state: { selectedExam: exam.code, mode: "practice" } });
+  /**
+   * A PYQ mock test is sat in the exam player, not written by the model.
+   *
+   * This used to open /GenerateTestPage with `mode: "pyq"` — the AI writer's
+   * screen, carrying a hint it does not act on. A button that says "PYQ mock
+   * test" has to produce a paper of previous year questions, and the route that
+   * does that is /pyq/practice: full official pattern, drawn from questions
+   * that were actually examined, run in the NTA interface with the key withheld
+   * until submission.
+   */
   const startPyq = () =>
-    navigate("/GenerateTestPage", { state: { selectedExam: exam.code, mode: "pyq" } });
-  // A chapter-scoped generation. Carrying the chapter through as a preselected
-  // topic means the generator narrows to it instead of the candidate having to
-  // find it again in a list of twenty on the next screen.
-  const startChapter = (topic: string) =>
-    navigate("/GenerateTestPage", {
-      state: { selectedExam: exam.code, mode: "practice", topics: [topic] },
+    navigate(`/pyq/practice?examCode=${encodeURIComponent(exam.code)}&mode=full`);
+
+  /**
+   * A chapter drill, sat as a real paper.
+   *
+   * Clicking a chapter used to unfold a list of its questions with the answers
+   * beside them, which is a reference page, not practice — you cannot test
+   * yourself on a question whose answer is already on screen. It now opens the
+   * same player as everything else, drawn ONLY from that chapter, and the
+   * answer and worked solution appear when the paper is submitted and not
+   * before.
+   *
+   * Length is capped at what the chapter actually holds. Asking for 25 from a
+   * chapter with 12 is refused by the generator — correctly, since it will not
+   * pad from elsewhere — and the candidate would see an error instead of a
+   * paper.
+   */
+  const startChapter = (topic: string, subject: string, available: number) => {
+    const p = new URLSearchParams({
+      examCode: exam.code,
+      subjects: subject,
+      topics: topic,
+      totalQuestions: String(Math.max(1, Math.min(available, 25))),
     });
+    navigate(`/pyq/practice?${p}`);
+  };
   const others = EXAMS.filter((e) => e.slug !== exam.slug);
   const paper = getPaper(exam.slug);
   // Every exam leads with the real paper, not just the three with a stocked
@@ -162,7 +190,7 @@ const ExamLandingPage: React.FC = () => {
           examShortName={exam.shortName}
           onGenerate={start}
           onPyqTest={startPyq}
-          onGenerateChapter={startChapter}
+          onPractiseChapter={startChapter}
           onCount={setPyqCount}
         />
 

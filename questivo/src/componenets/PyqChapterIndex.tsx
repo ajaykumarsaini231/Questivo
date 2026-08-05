@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Sparkles, ChevronRight, Layers } from "lucide-react";
+import { ChevronRight, Layers } from "lucide-react";
 import { fetchPyqTopics, type PyqSubjectChapters } from "../lib/pyq";
 
 /**
@@ -20,15 +20,22 @@ interface Props {
   /** Currently selected chapter, or "" for none. */
   selected: string;
   onSelect: (topic: string, subject: string) => void;
-  /** Generate an AI practice set weighted to one chapter. */
-  onGenerateChapter?: (topic: string, subject: string) => void;
+  /**
+   * Sit this chapter as a paper.
+   *
+   * The count is passed because the paper cannot be longer than the chapter:
+   * the generator draws only from what the filters match and refuses rather
+   * than padding from elsewhere, so the caller has to ask for something that
+   * exists.
+   */
+  onPractiseChapter?: (topic: string, subject: string, available: number) => void;
 }
 
 const PyqChapterIndex: React.FC<Props> = ({
   examCode,
   selected,
   onSelect,
-  onGenerateChapter,
+  onPractiseChapter,
 }) => {
   const [subjects, setSubjects] = useState<PyqSubjectChapters[] | null>(null);
   const [openSubject, setOpenSubject] = useState<string>("");
@@ -95,32 +102,43 @@ const PyqChapterIndex: React.FC<Props> = ({
           const isOpen = selected === c.topic;
           return (
             <li key={c.topic}>
+              {/* The whole card sits a paper on this chapter. Browsing the
+                  chapter's questions with their answers visible is still
+                  reachable from the small button, but it is not what a
+                  candidate clicking a chapter wants — they want to be tested on
+                  it, and an answer already on the page cannot test anyone. */}
               <div
                 className="card card-hover flex items-center gap-3 p-3"
                 style={isOpen ? { borderColor: "var(--c-brand)" } : undefined}
               >
                 <button
                   type="button"
-                  onClick={() => onSelect(isOpen ? "" : c.topic, active.subject)}
-                  aria-pressed={isOpen}
+                  title={`Sit a ${c.topic} paper`}
+                  onClick={() =>
+                    onPractiseChapter
+                      ? onPractiseChapter(c.topic, active.subject, c.count)
+                      : onSelect(isOpen ? "" : c.topic, active.subject)
+                  }
                   className="min-w-0 flex-1 text-left"
                 >
                   <span className="block truncate text-sm font-semibold">{c.topic}</span>
                   <span className="text-xs muted">
                     {c.count} question{c.count === 1 ? "" : "s"}
+                    {onPractiseChapter ? " · sit as a test" : ""}
                   </span>
                 </button>
 
-                {onGenerateChapter && (
+                {onPractiseChapter && (
                   <button
                     type="button"
-                    title={`Generate a fresh ${c.topic} set with AI`}
-                    aria-label={`Generate a fresh ${c.topic} set with AI`}
-                    onClick={() => onGenerateChapter(c.topic, active.subject)}
+                    title={`Browse ${c.topic} questions with solutions`}
+                    aria-label={`Browse ${c.topic} questions with solutions`}
+                    aria-pressed={isOpen}
+                    onClick={() => onSelect(isOpen ? "" : c.topic, active.subject)}
                     className="shrink-0 rounded-md p-2 hover:bg-slate-100"
-                    style={{ color: "var(--c-brand)" }}
+                    style={{ color: "var(--c-text-muted)" }}
                   >
-                    <Sparkles className="h-4 w-4" />
+                    <Layers className="h-4 w-4" />
                   </button>
                 )}
                 <ChevronRight
