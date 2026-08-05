@@ -43,31 +43,39 @@ export const FULL_TEST_BLUEPRINTS = {
   JEE_MAIN: {
     label: "JEE Main",
     /**
-     * The 2022–23 pattern, because that is what the archive holds — every
-     * stored JEE Main paper is from those two years, and 2022–23 printed 10
-     * numerical questions per subject of which any 5 were scored. Encoding the
-     * current 2025 pattern instead (5 compulsory numerical) would produce a
-     * paper that could not be filled from these questions and would mis-state
-     * the marks of the ones it did draw.
+     * The CURRENT pattern (2025/2026), not the archive's own 2022–23 one.
+     *
+     * The two differ in a way that matters: 2022–23 printed 10 numerical
+     * questions per subject and scored the best 5, and NTA abolished that
+     * "attempt any 5 of 10" rule on 17 October 2024. It exists in no live
+     * exam. A candidate sitting a mock today is preparing for the 2026 paper,
+     * so the mock has to be the 2026 shell — 20 multiple-choice + 5 numerical
+     * per subject, all 75 compulsory, +4/−1 throughout.
+     *
+     * The archive holding 2022–23 CONTENT is not an argument against this. A
+     * 2022 numerical question is a perfectly good numerical question; what
+     * changed is how many of them are printed and which of them count, and
+     * both of those are properties of the container, not the question.
      */
     patternNote:
-      "2022–23 pattern: 20 multiple-choice + 10 numerical per subject, best 5 of the 10 numerical scored.",
+      "2026 pattern: 20 multiple-choice + 5 numerical per subject, all 75 compulsory. +4 / −1.",
     durationMinutes: 180,
-    sectionBAttemptLimit: 5,
+    // No "best N of M" any more. Section B is compulsory and negatively marked.
+    sectionBAttemptLimit: null,
     marksCorrect: 4,
     marksIncorrect: -1,
     subjects: [
       { subject: "Physics", slots: [
         { count: 20, questionTypes: ["mcq_single"], label: "Section A · multiple choice" },
-        { count: 10, questionTypes: ["numerical", "integer"], label: "Section B · numerical" },
+        { count: 5, questionTypes: ["numerical", "integer"], label: "Section B · numerical" },
       ]},
       { subject: "Chemistry", slots: [
         { count: 20, questionTypes: ["mcq_single"], label: "Section A · multiple choice" },
-        { count: 10, questionTypes: ["numerical", "integer"], label: "Section B · numerical" },
+        { count: 5, questionTypes: ["numerical", "integer"], label: "Section B · numerical" },
       ]},
       { subject: "Mathematics", slots: [
         { count: 20, questionTypes: ["mcq_single"], label: "Section A · multiple choice" },
-        { count: 10, questionTypes: ["numerical", "integer"], label: "Section B · numerical" },
+        { count: 5, questionTypes: ["numerical", "integer"], label: "Section B · numerical" },
       ]},
     ],
   },
@@ -75,25 +83,33 @@ export const FULL_TEST_BLUEPRINTS = {
   NEET: {
     label: "NEET UG",
     /**
-     * BOTANY AND ZOOLOGY ARE NOT SEPARATE HERE, AND CANNOT BE.
+     * BIOLOGY IS ONE 90-QUESTION BLOCK — WHICH IS WHAT NTA ITSELF PUBLISHES.
      *
-     * The real paper is Physics 45, Chemistry 45, Botany 45, Zoology 45. The
-     * archive stores Biology as ONE subject — 727 questions, no Botany/Zoology
-     * column — and every one of those rows has a null chapter, so there is
-     * nothing in the data to derive the split from either. Splitting them would
-     * mean labelling 727 questions by hand or guessing with a model, and a
-     * guessed split produces a paper whose "Zoology section" is quietly part
-     * botany: worse than not claiming the split at all.
+     * The request was Physics 45 / Chemistry 45 / Botany 45 / Zoology 45. The
+     * NTA Information Bulletin's own table prints THREE rows, the third being
+     * "Biology (Botany & Zoology) — 90", and NTA scores Biology as a single
+     * combined subject for tie-breaking. The 45/45 split is a convention of how
+     * the printed booklet is laid out, not a scoring or structural division, so
+     * a three-block paper is not a compromise — it is the official table.
      *
-     * So the paper is drawn as Biology 90, which keeps the thing that actually
-     * affects the candidate exactly right — 180 questions, 720 marks, 200
-     * minutes, the real subject weighting. The moment the rows carry a
-     * botany/zoology marker, this becomes two 45-question entries and nothing
-     * else changes.
+     * It is also the only honest option here. The archive stores Biology as one
+     * subject (727 questions, no botany/zoology column) and every one of those
+     * rows has a null chapter, so there is nothing to derive a split from. The
+     * remaining route is asking a model to classify each question, and the
+     * Botany/Zoology boundary has no single ground truth — Biomolecules, Cell
+     * Structure, Genetics, Evolution and Ecology are filed differently by
+     * different institutes. A realistic 10–20% error rate means roughly 9 to 18
+     * misfiled questions in every Biology block, and a candidate who opens
+     * "Botany" and meets human physiology stops trusting the whole product.
+     *
+     * What the candidate actually experiences is identical either way: 180
+     * questions, 720 marks, 180 minutes, the real subject weighting, +4/−1.
      */
     patternNote:
-      "180 questions · 720 marks. Biology is drawn as one 90-question block: the archive does not label Botany and Zoology separately.",
-    durationMinutes: 200,
+      "2026 pattern: 180 questions · 720 marks · 180 minutes. Biology is one 90-question block, exactly as NTA's own bulletin prints it.",
+    // 180, not 200. The 200-minute paper was the 2021–23 Section A/B era; NTA
+    // removed the optional section and restored 180 minutes in January 2025.
+    durationMinutes: 180,
     sectionBAttemptLimit: null,
     marksCorrect: 4,
     marksIncorrect: -1,
@@ -119,7 +135,18 @@ export const FULL_TEST_BLUEPRINTS = {
     // GATE marks vary per question, so these are the defaults for anything the
     // slot does not pin down; the drawer reads each question's own marks.
     marksCorrect: 1,
-    marksIncorrect: -0.33,
+    marksIncorrect: -1 / 3,
+    /**
+     * GATE penalises by TYPE, not uniformly:
+     *   MCQ  −1/3 of a 1-mark question, −2/3 of a 2-mark one
+     *   MSQ  no negative marking
+     *   NAT  no negative marking
+     * A flat penalty would mark a candidate down for a wrong numerical answer
+     * that the real exam costs them nothing for, so the paper would score
+     * lower than the exam it is imitating.
+     */
+    negativeByType: (questionType, marks) =>
+      questionType === "mcq_single" ? -(marks / 3) : 0,
     subjects: [
       { subject: "General Aptitude", slots: [
         { count: 5, marks: 1, label: "1-mark" },
@@ -150,17 +177,33 @@ export const FULL_TEST_BLUEPRINTS = {
      * official pattern.
      */
     patternNote:
-      "Representative full-length practice paper. JEE Advanced changes its section structure most years, so this follows the archive's own mix rather than claiming one official pattern.",
+      "One paper's worth, in the 2026 shape. JEE Advanced is redesigned most years — question counts, marks and partial-marking rules have all moved — so this is representative practice, not a reproduction of one official paper.",
     durationMinutes: 180,
     sectionBAttemptLimit: null,
     marksCorrect: 4,
     marksIncorrect: -1,
     approximate: true,
-    subjects: [
-      { subject: "Physics", slots: [{ count: 18 }] },
-      { subject: "Chemistry", slots: [{ count: 18 }] },
-      { subject: "Mathematics", slots: [{ count: 18 }] },
-    ],
+    /**
+     * Typed slots, roughly the 2026 Paper 1 shape: 4 single-correct, 4
+     * multiple-correct and 8 numerical per subject.
+     *
+     * Untyped slots were worse than they looked. Drawing "18 Physics questions"
+     * from a pool that is 36% multiple-correct produced papers with wildly
+     * different type mixes run to run — and JEE Advanced's whole difficulty is
+     * the MSQ and numerical sections, so a draw that happened to be mostly
+     * single-correct is a much easier paper wearing the same name.
+     *
+     * Matching-list is absent: the archive has no such type, those items having
+     * been stored as single-correct when they were imported.
+     */
+    subjects: ["Physics", "Chemistry", "Mathematics"].map((subject) => ({
+      subject,
+      slots: [
+        { count: 4, questionTypes: ["mcq_single"], label: "Single correct" },
+        { count: 4, questionTypes: ["mcq_multiple"], label: "One or more correct" },
+        { count: 8, questionTypes: ["numerical", "integer"], label: "Numerical" },
+      ],
+    })),
   },
 };
 
@@ -225,7 +268,7 @@ export async function auditFullTest(examCode) {
     durationMinutes: blueprint.durationMinutes,
     sectionBAttemptLimit: blueprint.sectionBAttemptLimit,
     totalQuestions,
-    totalMarks: totalMarksFor(blueprint, rows),
+    totalMarks: estimateTotalMarks(blueprint, rows),
     rows,
     canGenerate: rows.every((r) => r.short === 0),
     shortBy: rows.reduce((n, r) => n + r.short, 0),
@@ -233,14 +276,17 @@ export async function auditFullTest(examCode) {
 }
 
 /**
- * What the paper is out of.
+ * What the paper will be out of, before it is drawn.
  *
- * GATE's slots carry their own marks; the others take the blueprint's. The
- * Section B "best N of M" rule reduces the total — a JEE Main paper of 90
- * questions is out of 300, not 360, because only 5 of each subject's 10
- * numerical questions are scored.
+ * An ESTIMATE, and named as one. Where a slot pins the marks (GATE) it is
+ * exact; where it does not, the questions themselves may be worth different
+ * amounts — the JEE Advanced archive holds 3-mark single-correct rows and
+ * 4-mark everything else — so the true total is only known once the draw has
+ * happened. generateFullTest recomputes it from the questions it actually took
+ * and returns that; this exists so the pattern summary has a number to show
+ * before the candidate commits.
  */
-function totalMarksFor(blueprint, rows) {
+function estimateTotalMarks(blueprint, rows) {
   let marks = 0;
   for (const r of rows) {
     const per = r.marks ?? blueprint.marksCorrect;
@@ -250,6 +296,33 @@ function totalMarksFor(blueprint, rows) {
         ? Math.min(r.needed, blueprint.sectionBAttemptLimit)
         : r.needed;
     marks += scored * per;
+  }
+  return Math.round(marks);
+}
+
+/**
+ * What the drawn paper is actually out of.
+ *
+ * Summed from the questions in hand, honouring the Section B cap per subject.
+ * The audit's estimate and this agreed for three of the four exams and drifted
+ * for JEE Advanced, where the estimate assumed 4 marks for rows that are worth
+ * 3 — so a candidate would have been shown "216 marks" on a paper that scores
+ * out of 200. The number on the paper has to be the number the marker uses.
+ */
+function realisedTotalMarks(blueprint, questions) {
+  const limit = blueprint.sectionBAttemptLimit;
+  if (!limit) {
+    return Math.round(questions.reduce((n, q) => n + (q.marksCorrect || 0), 0));
+  }
+  let marks = 0;
+  const usedBySubject = new Map();
+  for (const q of questions) {
+    if (q.section === "B") {
+      const used = usedBySubject.get(q.subject) || 0;
+      if (used >= limit) continue; // beyond the cap: present but not scored
+      usedBySubject.set(q.subject, used + 1);
+    }
+    marks += q.marksCorrect || 0;
   }
   return Math.round(marks);
 }
@@ -327,14 +400,19 @@ export async function generateFullTest(examCode) {
       // uniform over it rather than over whatever the planner returned first.
       for (const q of shuffle(pool).slice(0, slot.count)) {
         used.add(q.id);
+        const marksCorrect = slot.marks ?? q.marksCorrect ?? blueprint.marksCorrect;
         questions.push({
           ...q,
           paperQuestionNumber: ++paperNumber,
           questionNumber: ++withinSubject,
-          // The question's own marks win where it has them (GATE), else the
-          // blueprint's.
-          marksCorrect: slot.marks ?? q.marksCorrect ?? blueprint.marksCorrect,
-          marksIncorrect: q.marksIncorrect ?? blueprint.marksIncorrect,
+          // The slot's marks win where it pins them (GATE), else the question's
+          // own, else the blueprint's.
+          marksCorrect,
+          // Per-type where the exam marks that way — GATE does not penalise a
+          // wrong numerical or multi-select answer at all.
+          marksIncorrect: blueprint.negativeByType
+            ? blueprint.negativeByType(q.questionType, marksCorrect)
+            : (q.marksIncorrect ?? blueprint.marksIncorrect),
           // Section is what the Section B cap is applied by. Derived from the
           // slot rather than the stored row, because a drawn paper's sections
           // are the ones this blueprint just defined.
@@ -362,7 +440,8 @@ export async function generateFullTest(examCode) {
       sessionLabel: null,
       durationMinutes: blueprint.durationMinutes,
       totalQuestions: questions.length,
-      totalMarks: audit.totalMarks,
+      // From the questions actually drawn, not the pre-draw estimate.
+      totalMarks: realisedTotalMarks(blueprint, questions),
       marksCorrect: blueprint.marksCorrect,
       marksIncorrect: blueprint.marksIncorrect,
       sectionBAttemptLimit: blueprint.sectionBAttemptLimit,

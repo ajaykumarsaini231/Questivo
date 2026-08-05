@@ -5,7 +5,13 @@ import { buildPyqProfile } from "../lib/pyqProfile.js";
 import { markPaper, MARKING_SELECT } from "../lib/pyqMarking.js";
 import { generatePaper, planPaper, GENERATOR_PATTERNS } from "../lib/pyqGenerator.js";
 import { generateFullTest, listFullTestPatterns } from "../lib/pyqBlueprints.js";
-import { DRAWABLE, buildQuestionWhere, examFacets, normalizeSpec } from "../lib/pyqFilters.js";
+import {
+  DRAWABLE,
+  buildBrowseWhere,
+  buildQuestionWhere,
+  examFacets,
+  normalizeSpec,
+} from "../lib/pyqFilters.js";
 
 /* ------------------------------ read APIs ------------------------------- */
 
@@ -56,7 +62,7 @@ export const getPyqCoverage = async (_req, res) => {
 /** Paged PYQ list. Solutions are excluded here — they are fetched per question. */
 export const listPyqs = async (req, res) => {
   try {
-    const { examCode: raw, year, subject, session, page = 1, pageSize = 20 } = req.query;
+    const { examCode: raw, page = 1, pageSize = 20 } = req.query;
     const examCode = resolvePyqExamCode(raw);
     if (!examCode) {
       // Not an exam we carry PYQs for. 404 rather than an empty 200 so the UI
@@ -64,14 +70,14 @@ export const listPyqs = async (req, res) => {
       return res.status(404).json({ error: "No previous year questions for this exam", canRequest: true });
     }
 
-    const where = { examCode };
-    if (year) where.year = Number(year);
-    if (subject) where.subject = subject;
-    if (session) where.session = session;
-    // Chapter is how candidates actually revise — one chapter at a time,
-    // across every year — so it is a first-class filter, not a sub-filter of
-    // year.
-    if (req.query.topic) where.topic = req.query.topic;
+    // Exam, year, session, subject and chapter, built by lib/pyqFilters.js.
+    // Shared with the admin question table so one filter cannot select two
+    // different sets of rows — the table is where a broken question gets fixed
+    // and this list is where the fix has to show up.
+    //
+    // Chapter is how candidates actually revise — one chapter at a time, across
+    // every year — so it is a first-class filter, not a sub-filter of year.
+    const where = buildBrowseWhere({ ...req.query, examCode });
 
     const take = Math.min(Number(pageSize) || 20, 50);
     const skip = (Math.max(Number(page) || 1, 1) - 1) * take;
@@ -391,6 +397,15 @@ export const getPyqPaper = async (req, res) => {
         optionBImage: true,
         optionCImage: true,
         optionDImage: true,
+        // How much of each of those to draw. Without it the player shows the
+        // whole file, and an operator's crop is applied on the admin screen it
+        // was made on and nowhere else.
+        imageCrops: true,
+        // Which of the two the player draws. Without it the player falls back
+        // to "a crop wins", and an operator's decision to show the text of a
+        // mis-cut question would be silently ignored on the one screen it was
+        // made for.
+        renderAs: true,
         sourceUrl: true,
       },
     });
@@ -1169,6 +1184,11 @@ const REVIEW_SELECT = {
   diagramImage: true,
   questionImage: true,
   optionAImage: true, optionBImage: true, optionCImage: true, optionDImage: true,
+  // The review screen re-renders the paper, so it has to draw each question the
+  // same way the player did or a candidate sees a different question afterwards.
+  // That goes for how much of each crop is shown as much as for which form wins.
+  imageCrops: true,
+  renderAs: true,
   sourceUrl: true,
   year: true,
 };

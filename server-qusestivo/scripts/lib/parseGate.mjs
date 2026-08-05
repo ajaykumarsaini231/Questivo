@@ -241,16 +241,40 @@ export function parseGatePaper(lines) {
   // 22 gains it — and since 22's options were figures, that stray clause became
   // its option D. The tell is an anchor line carrying nothing but the number,
   // so the line above it is taken back.
+  //
+  // The number is not always alone on its line either. extractLines orders by
+  // baseline and WELDS the number to whichever line shares its own — which,
+  // for a number centred against two lines of question, is the SECOND of them:
+  //
+  //     Which one of the following dislocation dissociation reactions is feasible in
+  //     Q.18 face-centered cubic metals?
+  //
+  // The anchor then carries text, and the rule below used to read that as
+  // proof the question was whole. GATE MT 2026 asked five questions beginning
+  // mid-sentence because of it.
+  //
+  // Letting ANY anchor take back the line above fixes those five and wrecks a
+  // hundred others: measured over 2019-2026, it also swallows the "Given:"
+  // line belonging to the question before, and page furniture like "17 of 51".
+  // Both look exactly like a wrapped clause to a rule that only reads the line
+  // above. What separates them is the anchor's OWN text — a welded second line
+  // continues a sentence, so it begins in lower case, while a question that
+  // merely follows a stray line begins like a question. That test, together
+  // with the line above running on in lower case too, moves those five and
+  // nothing else in the archive.
+  const RUNS_ON = /[a-z]\s*$/;
+  const CONTINUES = /^[a-z]/;
   for (const s of starts) {
     s.from = s.line;
-    if (s.rest || s.line === 0) continue;
+    if (s.line === 0) continue;
+    if (s.rest && !(CONTINUES.test(s.rest) && RUNS_ON.test(clean[s.line - 1] ?? ""))) continue;
     const above = clean[s.line - 1];
     if (!above || STARTS_OPTION.test(above) || QUESTION.test(above)) continue;
     // A completed sentence above a bare question number belongs to the
     // question before it. A wrapped opening clause — the case this exists for —
     // runs on into the line below and does not end in a full stop.
     if (/[.?:;]\s*$/.test(above)) continue;
-    s.rest = above;
+    s.rest = s.rest ? `${above} ${s.rest}` : above;
     s.from = s.line - 1;
   }
 

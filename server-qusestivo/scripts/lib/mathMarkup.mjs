@@ -239,7 +239,18 @@ export function wrapMath(text) {
     // context, and wrapping it only adds noise.
     if (inner.length < 2 || !IS_MATH.test(inner)) continue;
 
-    const at = m.index + raw.indexOf(inner);
+    const offset = raw.indexOf(inner);
+    // `tighten` usually trims the ends, but balancing brackets can drop one
+    // from the MIDDLE — "_{V}∫(∇" comes back as "_{V}∫∇" — and then the tightened
+    // span is not a substring of the span at all. indexOf answers -1, the
+    // arithmetic below reads it as "one character before the match", and the
+    // text either side is copied out twice: GATE MT 2022 Q23 came out as
+    // "volume integral$_{V}\int \nabla$(∇⃗· f⃗) dV", with an operator it never
+    // had. There is no honest offset to use, so leave the span alone and let
+    // mopUp delimit whatever LaTeX it holds.
+    if (offset < 0) continue;
+
+    const at = m.index + offset;
     if (at < last) continue;
 
     out += text.slice(last, at) + `$${toLatex(inner)}$`;

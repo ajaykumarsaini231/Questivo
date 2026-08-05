@@ -24,12 +24,13 @@ import { useAudience } from "../componenets/AudienceProvider";
 const ExamsIndexPage: React.FC = () => {
   const [coverage, setCoverage] = useState<PyqCoverage[]>([]);
   const [requestOpen, setRequestOpen] = useState(false);
-  const { audience, visibleExams, allExams, reopenChoice } = useAudience();
-  // The escape hatch that makes narrowing safe. This is a directory page — its
-  // whole job is to show what exists — so a visitor must always be able to see
-  // past their own track without changing it.
+  const { audience, visibleExams, allExams, lockedToTrack, reopenChoice } = useAudience();
+  // The "see past your track" toggle, kept for anyone NOT locked to one — an
+  // admin, or a visitor who has not chosen yet. For a candidate who has told us
+  // what they are preparing for, a directory of every exam on the site is the
+  // noise the track exists to remove, and they change track in the profile.
   const [showAll, setShowAll] = useState(false);
-  const listed = showAll || !audience ? allExams : visibleExams;
+  const listed = (showAll && !lockedToTrack) || !audience ? allExams : visibleExams;
 
   useEffect(() => {
     const ac = new AbortController();
@@ -93,14 +94,16 @@ const ExamsIndexPage: React.FC = () => {
                 Showing <strong>{audience.label}</strong> exams
                 {showAll ? " alongside everything else" : ""}.
               </span>
-              <button
-                type="button"
-                onClick={() => setShowAll((v) => !v)}
-                className="font-semibold underline"
-                style={{ color: "var(--c-brand)" }}
-              >
-                {showAll ? `Show only my ${visibleExams.length}` : `Show all ${allExams.length}`}
-              </button>
+              {!lockedToTrack && (
+                <button
+                  type="button"
+                  onClick={() => setShowAll((v) => !v)}
+                  className="font-semibold underline"
+                  style={{ color: "var(--c-brand)" }}
+                >
+                  {showAll ? `Show only my ${visibleExams.length}` : `Show all ${allExams.length}`}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={reopenChoice}

@@ -19,6 +19,8 @@ import SafeMathRenderer from "./SafeMathRenderer";
 // formatter shared by the player, the history list and this view belongs in a
 // module that exports no components at all.
 import { hhmmss } from "../lib/pyqHistory";
+import PyqFigure from "./PyqFigure";
+import { renderMode, cropOf } from "../lib/pyqPapers";
 import type { PyqPaperQuestion, PyqScore } from "../lib/pyqPapers";
 
 export function Stat({ label, value }: { label: string; value: string }) {
@@ -228,9 +230,10 @@ export default function PyqResultView({
                     the player. A question whose text could not be extracted
                     reads as a placeholder line, and reviewing a paper is
                     precisely when you need to recognise what you got wrong. */}
-                {q?.questionImage ? (
-                  <img
+                {q && renderMode(q) === "image" && q.questionImage ? (
+                  <PyqFigure
                     src={q.questionImage}
+                    crop={cropOf(q, "questionImage")}
                     alt={`Question ${r.paperQuestionNumber} as printed`}
                     loading="lazy"
                     className="mt-2 max-w-full rounded border border-slate-200"
@@ -243,7 +246,7 @@ export default function PyqResultView({
                   )
                 )}
 
-                {q?.diagramImage && !q?.questionImage && (
+                {q?.diagramImage && renderMode(q) === "text" && (
                   <img
                     src={q.diagramImage}
                     alt={`Question ${r.paperQuestionNumber} as printed`}
@@ -251,7 +254,7 @@ export default function PyqResultView({
                     className="mt-2 max-h-96 rounded border border-slate-200"
                   />
                 )}
-                {!q?.diagramImage && !q?.questionImage && q?.diagramSvg && (
+                {!q?.diagramImage && renderMode(q ?? {}) === "text" && q?.diagramSvg && (
                   <div
                     className="mt-2 overflow-x-auto"
                     // Sanitized server-side by lib/sanitizeSvg.js before storage.
@@ -266,7 +269,10 @@ export default function PyqResultView({
                   <div className="mt-3 grid gap-1.5 sm:grid-cols-2">
                     {(["A", "B", "C", "D"] as const).map((letter) => {
                       const text = (q as any)[`option${letter}`] as string | null;
-                      const image = (q as any)[`option${letter}Image`] as string | null;
+                      const crop = (q as any)[`option${letter}Image`] as string | null;
+                      // Drawn the way the player drew it, for the same reason:
+                      // reviewing a paper has to show the question you sat.
+                      const image = renderMode(q) === "text" && text?.trim() ? null : crop;
                       if (!text && !image) return null;
 
                       const isKey = (r.correctAnswer ?? "").toUpperCase().includes(letter);
@@ -289,7 +295,13 @@ export default function PyqResultView({
                           {!image && <span className="font-semibold text-slate-500">({letter})</span>}
                           <span className="flex-1 text-slate-800">
                             {image ? (
-                              <img src={image} alt={`Option ${letter}`} loading="lazy" className="max-w-full" />
+                              <PyqFigure
+                                src={image}
+                                crop={cropOf(q, `option${letter}Image`)}
+                                alt={`Option ${letter}`}
+                                loading="lazy"
+                                className="max-w-full"
+                              />
                             ) : (
                               <SafeMathRenderer text={text!} />
                             )}
@@ -324,8 +336,11 @@ export default function PyqResultView({
                     </summary>
                     <div className="mt-2 text-sm text-slate-700">
                       {r.solutionImage ? (
-                        <img
+                        <PyqFigure
                           src={r.solutionImage}
+                          // The window lives on the question, not on the
+                          // marking row the solution path is carried by.
+                          crop={cropOf(q, "solutionImage")}
                           alt={`Worked solution for question ${r.paperQuestionNumber}`}
                           loading="lazy"
                           className="max-w-full rounded border border-slate-200"

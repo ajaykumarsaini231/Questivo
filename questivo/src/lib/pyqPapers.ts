@@ -99,7 +99,103 @@ export interface PyqPaperQuestion {
   optionBImage: string | null;
   optionCImage: string | null;
   optionDImage: string | null;
+  /** How much of each of those to draw. See `cropOf`. */
+  imageCrops: ImageCrops | null;
+  /**
+   * How this question is drawn, when the default gets it wrong.
+   *
+   * null is the standing rule — a part with a crop is drawn as its crop. The
+   * two overrides exist because that rule cannot see a figure cut off the wrong
+   * part of the page, or a transcription cleaner than the scan it came from.
+   * Set per question in the admin question bank. See `renderMode` below.
+   */
+  renderAs: "image" | "text" | null;
   sourceUrl: string | null;
+}
+
+/**
+ * Which of a question's two forms to draw, resolved once for the whole question.
+ *
+ * The rule the archive was imported under is "the crop wins": what the board
+ * printed is authoritative and the extracted text is a transcription of it. The
+ * override says otherwise, and "text" only means anything when there IS text —
+ * pinning a figure-only question to text would draw an empty question, so the
+ * fallback is always the form that actually exists.
+ */
+export function renderMode(q: {
+  renderAs?: "image" | "text" | null;
+  questionText?: string | null;
+  questionImage?: string | null;
+}): "image" | "text" {
+  if (q.renderAs === "text" && q.questionText?.trim()) return "text";
+  if (q.renderAs === "image" && q.questionImage) return "image";
+  return q.questionImage ? "image" : "text";
+}
+
+/* --------------------------- crop windows --------------------------- */
+
+/** The image columns a crop window can narrow. */
+export type PyqImageField =
+  | "questionImage"
+  | "optionAImage"
+  | "optionBImage"
+  | "optionCImage"
+  | "optionDImage"
+  | "solutionImage";
+
+/** Insets in percent of the stored file, in the order CSS writes them. */
+export type CropWindow = { top: number; right: number; bottom: number; left: number };
+
+export type ImageCrops = Partial<Record<PyqImageField, CropWindow>>;
+
+/** An untouched image, and what a cleared crop resets to. */
+export const NO_CROP: CropWindow = { top: 0, right: 0, bottom: 0, left: 0 };
+
+export const IMAGE_FIELDS: PyqImageField[] = [
+  "questionImage",
+  "optionAImage",
+  "optionBImage",
+  "optionCImage",
+  "optionDImage",
+  "solutionImage",
+];
+
+/**
+ * How much of one part's crop to draw.
+ *
+ * Shared for the same reason `renderMode` is: the admin's whole claim is that
+ * it shows what the candidate will get, and a second copy of this rule would
+ * eventually disagree with the player's.
+ *
+ * Defensive about its input because the column is free-form JSON written by an
+ * editor. A window that does not parse means "draw the file whole", which is
+ * the behaviour every row had before the column existed — the wrong crop is
+ * recoverable, a question that renders as an empty box is not.
+ */
+export function cropOf(
+  q: { imageCrops?: ImageCrops | null } | null | undefined,
+  field: PyqImageField
+): CropWindow | null {
+  const raw = q?.imageCrops?.[field];
+  if (!raw || typeof raw !== "object") return null;
+
+  const sides = (["top", "right", "bottom", "left"] as const).map((side) => {
+    const n = (raw as Record<string, unknown>)[side];
+    return typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= 100 ? n : 0;
+  });
+  const [top, right, bottom, left] = sides;
+
+  // The same floor the server enforces, applied again here rather than assumed:
+  // this also runs against a draft the editor is still dragging, which has not
+  // been near the server yet.
+  if (left + right > 98 || top + bottom > 98) return null;
+  if (!top && !right && !bottom && !left) return null;
+  return { top, right, bottom, left };
+}
+
+/** Is there any cropping on this row at all? Drives the admin's badges. */
+export function hasCrops(q: { imageCrops?: ImageCrops | null } | null | undefined) {
+  return IMAGE_FIELDS.some((f) => cropOf(q, f) !== null);
 }
 
 export type Verdict = "correct" | "wrong" | "unattempted" | "bonus" | "not_counted";
@@ -276,6 +372,26 @@ export function paletteState(
   if (answered) return "answered";
   return visited ? "notAnswered" : "notVisited";
 }
+
+/* ---------------------------- the player's shell ---------------------------- */
+
+/**
+ * How wide the paper runner lays itself out, and how wide that leaves the
+ * question.
+ *
+ * Here rather than in the runner because the admin's preview frame is measured
+ * from it. A figure that fits the drawer at 600px and overflows the player at
+ * 1012 is exactly the defect the preview exists to catch, so previewing at the
+ * drawer's own width answers the wrong question.
+ *
+ * PyqPaperRunner applies SHELL to its outer flex row. ASIDE is the one number
+ * that is still written twice — it is a responsive class there (`lg:w-[340px]`,
+ * full width below that breakpoint) and an inline style would flatten it.
+ */
+export const PLAYER_SHELL_WIDTH = 1400;
+export const PLAYER_ASIDE_WIDTH = 340;
+/** …less the shell's `p-4` on both sides and the `gap-4` between the columns. */
+export const PLAYER_QUESTION_WIDTH = PLAYER_SHELL_WIDTH - 32 - 16 - PLAYER_ASIDE_WIDTH;
 
 /** NTA's own palette colours, so the screen is familiar under exam stress. */
 export const PALETTE_STYLE: Record<PaletteState, string> = {

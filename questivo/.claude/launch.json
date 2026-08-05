@@ -6,6 +6,12 @@
       "runtimeExecutable": "npx",
       "runtimeArgs": ["--yes", "serve", "dist", "-l", "4173"],
       "port": 4173
+    },
+    {
+      "name": "questivo-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--", "--port", "5199"],
+      "port": 5199
     }
   ]
 }

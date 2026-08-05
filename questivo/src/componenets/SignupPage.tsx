@@ -9,7 +9,10 @@ import { FcGoogle } from "react-icons/fc";
 import { motion } from "framer-motion";
 
 // 1. IMPORT GOOGLE HOOK
-import { useGoogleLogin } from "@react-oauth/google"; 
+import { useGoogleLogin } from "@react-oauth/google";
+
+import OtpResendButton from "./OtpResendButton";
+import { useOtpCooldown, type OtpPurpose } from "../lib/useOtpCooldown";
 
 /* ================= TYPES ================= */
 
@@ -82,6 +85,41 @@ const Signup = () => {
     otp: "",
     newPassword: "",
   });
+  const [resending, setResending] = useState(false);
+
+  /**
+   * The resend limit, mirrored from the server.
+   *
+   * Keyed by purpose as well as address because the server limits them
+   * separately: waiting out a password-reset cooldown must not also grey out
+   * the login button, and vice versa.
+   */
+  const otpPurpose: OtpPurpose =
+    variant === "SIGNUP" ? "SIGNUP" : variant === "FORGOT_PASSWORD" ? "RESET_PASSWORD" : "LOGIN";
+  const cooldown = useOtpCooldown(otpPurpose, data.email);
+
+  /** Re-issue the code for whichever flow is on screen. */
+  const resendOtp = async () => {
+    if (cooldown.waiting || resending) return;
+    setResending(true);
+    try {
+      if (variant === "SIGNUP") await handleSignupInit();
+      else if (variant === "FORGOT_PASSWORD") await handleForgotPassInit();
+      else await handleSendLoginOtp();
+      toast.success("A new code is on its way.");
+    } catch (error: any) {
+      // A refusal here is the throttle, and it carries the authoritative
+      // remaining time — so the countdown resynchronises to the server rather
+      // than to whatever this page assumed.
+      if (!cooldown.noteError(error)) {
+        toast.error(error.response?.data?.message || "Could not resend the code");
+      } else {
+        toast.error(error.response?.data?.message || "Please wait before requesting another code");
+      }
+    } finally {
+      setResending(false);
+    }
+  };
 
   // --- CHECK AUTH ON MOUNT ---
   useEffect(() => {
@@ -170,6 +208,11 @@ const Signup = () => {
     const res = await api.post<ApiResponse>("/api/auth/signin/otp", { email: data.email });
     if (res.data.success) {
       toast.success(`OTP sent to ${data.email}`);
+      // Started from the send, not from arriving at step 2: the countdown has to
+      // be running before the resend button is ever on screen, or a user who
+      // gets there quickly can fire a second request inside the server's window
+      // and take a strike for it.
+      cooldown.startCooldown();
       setStep(2);
     }
   };
@@ -190,6 +233,7 @@ const Signup = () => {
     });
     if (res.data.success) {
       toast.success("Account created! Check email for OTP.");
+      cooldown.startCooldown();
       setStep(2);
     }
   };
@@ -207,6 +251,7 @@ const Signup = () => {
     const res = await api.post<ApiResponse>("/api/auth/password/reset", { email: data.email });
     if (res.data.success) {
       toast.success(`Reset code sent to ${data.email}`);
+      cooldown.startCooldown();
       setStep(2);
     }
   };
@@ -263,6 +308,11 @@ const Signup = () => {
       }
     } catch (error: any) {
       console.error(error);
+      // Throttle refusals set the countdown from the server's own number, so a
+      // user who somehow got a request through inside the window still sees the
+      // button lock for the right length of time instead of being free to try
+      // again immediately and earn another strike.
+      cooldown.noteError(error);
       const msg = error.response?.data?.message || "Something went wrong";
       toast.error(msg);
     } finally {
@@ -418,6 +468,13 @@ const Signup = () => {
                 <p className="text-center text-sm text-gray-500">
                   Enter the code sent to <span className="font-semibold">{data.email}</span>
                 </p>
+
+                {/* There was no way to ask for a new code at all before this —
+                    a user whose email was slow had to abandon the flow and
+                    start over, which sent a fresh code anyway. Now it is one
+                    button, and it is the button that carries the cooldown. */}
+                <OtpResendButton cooldown={cooldown} onResend={resendOtp} sending={resending} />
+
                 <button
                   type="button"
                   onClick={() => setStep(1)}

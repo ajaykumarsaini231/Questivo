@@ -13,6 +13,7 @@ import {
   generateMockPaper,
   getGeneratorOptions,
   scoreQuestionSet,
+  listFullTests,
   listMyAttempts,
   getMyAttempt,
   createCourseRequest,
@@ -105,6 +106,9 @@ router.post("/papers/:paperId/score", optionalAuth, scorePyqPaper);
 // years, difficulty, distribution.
 router.get("/practice/generate", generateLimiter, generateMockPaper);
 router.get("/generate/options", getGeneratorOptions);
+// The official pattern of every full-length paper, plus whether the archive can
+// currently fill it. Read before the Full Test card renders.
+router.get("/full-tests", listFullTests);
 router.post("/generate", generateLimiter, generateMockPaper);
 // optionalAuth for the same reason as the paper scorer: a signed-in candidate's
 // generated paper lands in their history, an anonymous one is still scored.

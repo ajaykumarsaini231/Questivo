@@ -175,6 +175,50 @@ export function buildQuestionWhere(spec, extra = null) {
 }
 
 /**
+ * The BROWSE filters — exam, year, session, subject, chapter — as one `where`.
+ *
+ * Separate from buildQuestionWhere above because the two answer different
+ * questions. That one builds the pool a PAPER may be drawn from, so it folds in
+ * DRAWABLE and excludes needsFigure rows: nothing unscoreable may reach a
+ * candidate. This one builds a LIST, where the unscoreable rows are frequently
+ * the whole point — the admin table exists to find them.
+ *
+ * Shared by the public list (listPyqs) and the admin table so a filter cannot
+ * mean two things. The admin table is how a broken row gets fixed and the public
+ * list is where the fix shows up; if "session=January" selected different rows
+ * in each, an editor would fix a question the candidate never sees.
+ *
+ * `examCode` is expected already resolved by resolvePyqExamCode — the callers
+ * differ on what an unknown exam means (the public list 404s, the admin table
+ * shows every exam) and that decision does not belong here.
+ */
+export function buildBrowseWhere(raw = {}) {
+  const and = [];
+  const year = Number(raw.year);
+  if (Number.isSafeInteger(year)) and.push({ year });
+  if (raw.subject) and.push({ subject: raw.subject });
+
+  // Matched against BOTH session columns, because which one is populated
+  // depends on which importer wrote the row — 6,264 rows carry `session` and
+  // 4,905 carry `sessionLabel`. Reading only `session`, as this used to, made
+  // the filter silently miss every converted paper.
+  if (raw.session) {
+    and.push({ OR: [{ session: raw.session }, { sessionLabel: raw.session }] });
+  }
+
+  // Topic and chapter are separate levels for GATE and the same value for the
+  // JEE importers, so a selection matches either column. Same rule as
+  // buildQuestionWhere, for the same reason.
+  const chapter = raw.chapter || raw.topic;
+  if (chapter) and.push({ OR: [{ chapter }, { topic: chapter }] });
+
+  return {
+    ...(raw.examCode ? { examCode: raw.examCode } : {}),
+    ...(and.length ? { AND: and } : {}),
+  };
+}
+
+/**
  * Every facet the archive actually holds for one exam, with counts.
  *
  * Derived, never hardcoded. A hardcoded list of years goes stale the moment a

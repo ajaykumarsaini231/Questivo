@@ -42,6 +42,26 @@ model User {
   bio             String?
   photoUrl        String?
 
+  /// Which track this candidate is on — "jee-neet", "government", "college".
+  ///
+  /// WHY THIS IS ON THE ACCOUNT AND NOT IN localStorage
+  ///
+  /// It used to live only in the browser, which meant the choice was a property
+  /// of a DEVICE rather than of a person: signing in from a phone, a college lab
+  /// machine, a second browser or after clearing site data produced a visitor
+  /// with no track, and the site fell back to showing every exam it carries. A
+  /// NEET aspirant would be looking at SSC and GATE papers for no reason they
+  /// could see, having already answered the question on their laptop.
+  ///
+  /// Stored here it follows the account everywhere and survives a reinstall.
+  /// The browser copy is kept as a cache for signed-out visitors and is
+  /// overwritten by this value the moment the session is known.
+  audienceId String?
+  /// One exam to lead with inside that track. Optional — a candidate who is
+  /// certain gets a site pointed at exactly one exam, one who is not gets the
+  /// whole track.
+  focusExam  String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -56,6 +76,60 @@ model PendingUser {
   otpHash       String   // HMAC-hashed OTP
   otpExpiresAt  DateTime
   createdAt     DateTime @default(now())
+}
+
+/// Rate limit state for OTP issuance, one row per (who, why).
+///
+/// WHY THIS IS A TABLE AND NOT A MEMORY MAP
+///
+/// Every OTP send costs an email, and an unthrottled send endpoint is a free
+/// mail cannon: anyone can point it at a victim's inbox, or at our own sending
+/// quota, until one of the two gives out. Nothing throttled it before this.
+///
+/// express-rate-limit was the obvious reach, and it is the wrong tool here for
+/// two reasons. Its default store is per-process memory, so with more than one
+/// server instance an attacker simply gets one full allowance per instance and
+/// a 24-hour block applied on one instance does not exist on the others — the
+/// limit silently weakens exactly as the deployment scales. And memory does not
+/// survive a restart, so a blocked abuser is released by any deploy.
+///
+/// Postgres is already shared by every instance and already durable, so the
+/// limit is enforced identically no matter how many servers are running and
+/// survives restarts. The read-modify-write is done under a row lock (see
+/// lib/otpThrottle.js), which is what makes it correct when two requests for
+/// the same address land on two different instances at the same moment.
+model OtpThrottle {
+  id String @id @default(uuid())
+
+  /// Who is being limited. Either a normalised email address, or "ip:1.2.3.4"
+  /// for the per-address volume cap. One column for both so the same locking
+  /// logic covers "this account" and "this source".
+  identifier String
+  /// SIGNUP | LOGIN | RESET_PASSWORD | IP — which flow the limit applies to.
+  /// Kept separate so a password reset cooldown cannot lock someone out of
+  /// logging in, which would turn a rate limit into a denial of service.
+  purpose    String
+
+  /// When an OTP was last actually issued. The cooldown is measured from here.
+  lastSentAt DateTime
+  /// Lifetime sends, for the admin panel and for spotting abuse patterns.
+  sendCount  Int      @default(0)
+
+  /// Requests that arrived INSIDE the cooldown window — i.e. someone asking
+  /// again when they had already been told to wait. Enough of these and the
+  /// address is blocked outright.
+  strikes    Int      @default(0)
+  /// Set when the strike limit is reached. Until this passes, no OTP is issued
+  /// for this identifier and purpose at all.
+  blockedUntil DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([identifier, purpose])
+  // Sweeping expired rows, and listing who is currently blocked.
+  @@index([blockedUntil])
+  @@index([updatedAt])
 }
 
 
@@ -228,6 +302,50 @@ model PreviousYearQuestion {
   /// The worked solution, for sources that print one.
   solutionImage String?
 
+  /// Crop windows applied to the images above when they are drawn.
+  ///
+  /// `{ "optionDImage": { "top": 0, "right": 0, "bottom": 62.4, "left": 0 } }` —
+  /// insets in PERCENT of the stored file, keyed by the column they narrow.
+  /// Null, or a missing key, means the file is drawn whole.
+  ///
+  /// This exists because a bad crop cannot be fixed where it was made. The PNGs
+  /// live in the pyq-figures repo and reach the browser over jsDelivr, so
+  /// re-cutting one is a commit and a CDN wait, not a save — and the common
+  /// defect does not need a new file anyway. extractFigures runs the last
+  /// option's rectangle to the bottom of the question band, and the page footer
+  /// sitting in that band is real ink that defeats the whitespace trim, so 72
+  /// of the GATE MT option crops are a choice followed by a screenful of blank
+  /// and a "Page 11 of 25". The right pixels are all present; too many of them
+  /// are shown. A window is enough to fix that, and it is reversible, which a
+  /// re-cut file is not.
+  ///
+  /// Percent rather than pixels: a converter re-run can change a file's size,
+  /// and a percentage degrades into a slightly-off crop where a pixel offset
+  /// would silently frame the wrong band.
+  ///
+  /// One Json column rather than six `*Crop` columns. It is null on almost
+  /// every row, and the table already carries six image columns without adding
+  /// six more to the width of every read.
+  imageCrops Json?
+
+  /// How this question is drawn for a candidate: "image" | "text" | null.
+  ///
+  /// Null is the standing rule and the one every row was imported under — a
+  /// part that HAS a crop is drawn as its crop, because the crop is what the
+  /// board actually printed and the text is only a transcription of it.
+  ///
+  /// The rule is right in the general case and wrong in two specific ones, and
+  /// neither is visible from the row: a crop that was cut off the wrong part of
+  /// the page, and a transcription that came out cleaner than the scan. Both
+  /// need a human to look at the question and say which one to show, so this is
+  /// that decision, recorded — an override of the default, not a replacement
+  /// for it. Set from the admin question bank.
+  ///
+  /// Deliberately one setting for the whole question rather than one per part.
+  /// A stem drawn from a scan beside options drawn from text is two typefaces
+  /// in one question, which reads as a rendering fault.
+  renderAs String?
+
   /// Language codes this question's text is stored in, e.g. ["en"] or
   /// ["en","hi"]. The NTA player offers a language switch, so the renderer has
   /// to know which are actually available before offering it.
@@ -340,6 +458,18 @@ model PyqAttempt {
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  /// Which of the two things this sitting was:
+  ///
+  ///   "pyq"       — one real shift, sat exactly as printed. `paperId` names it.
+  ///   "generated" — a paper assembled from the question bank to a pattern.
+  ///                 There is no PyqPaper row behind it, so `paperId` is
+  ///                 "generated" and `questionIds` IS the paper.
+  ///
+  /// The history page files these under different tabs, and the distinction is
+  /// not derivable after the fact: both are rows of the same shape over the
+  /// same archive questions.
+  kind String @default("pyq")
+
   /// Matches PyqPaper.id. FK-free like PreviousYearQuestion.paperId, so an
   /// attempt survives a paper being re-imported.
   paperId  String
@@ -349,6 +479,35 @@ model PyqAttempt {
   /// "Session 1 · 24 Jan 2023 · Shift 1" — enough to label the row in a history
   /// list without joining back to the paper.
   label    String?
+
+  // ───────────────────── the facets, stored discretely ─────────────────────
+  //
+  // `label` above is a display string. It cannot be filtered, grouped or
+  // sorted on, and parsing it back apart is exactly the mistake
+  // PreviousYearQuestion.session already made and had to be corrected for. The
+  // history page filters by session and shift, so those are columns.
+
+  sessionLabel String?
+  dateLabel    String?
+  shiftLabel   String?
+  /// Set only when the sitting covered ONE subject — a single-subject generated
+  /// paper. Null for a full three-subject paper, where naming one subject would
+  /// be a lie rather than a blank.
+  subject      String?
+
+  /// The question set in the order it was served.
+  ///
+  /// A real paper can be re-read from PreviousYearQuestion by paperId, but a
+  /// generated one cannot: it exists only as the draw that produced it.
+  /// `responses` is not a substitute — it holds only the questions that were
+  /// answered, unordered, so replaying a sitting from it would silently drop
+  /// every question the candidate skipped.
+  questionIds    String[] @default([])
+  totalQuestions Int?
+  /// What was asked for, for a generated paper — subjects, chapters, counts,
+  /// difficulty. Kept so the history row can say what the paper WAS, and so an
+  /// identical one can be drawn again.
+  spec           Json?
 
   /// Marks actually scored, under the paper's own marking scheme — including
   /// the Section B "best 5 of 10" rule, which is why this is stored rather than
@@ -370,6 +529,8 @@ model PyqAttempt {
 
   // The profile lists a user's most recent sittings.
   @@index([userId, createdAt])
+  // The history page lists them one category at a time, which is this index.
+  @@index([userId, kind, createdAt])
   @@index([paperId])
 }
 

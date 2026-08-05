@@ -1,18 +1,35 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
-import { 
-  User, Mail, Calendar, Shield, BookOpen, 
-  Trophy, Target, BarChart2, Clock, 
+import {
+  User, Mail, Calendar, Shield, BookOpen,
+  Trophy, Target, BarChart2, Clock,
   RefreshCw, Eye, Settings, Save, Lock, Image as ImageIcon,
+  Search, Sparkles, FileText, Timer, Award, X,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import toast, { Toaster } from 'react-hot-toast';
+import PremiumDialog from './PremiumDialog';
+import { useAudience } from './AudienceProvider';
+import { examsForAudience, getAudience, type AudienceId } from '../lib/audience';
+import {
+  fetchMyAttempts,
+  hhmmss,
+  fmtDate,
+  searchIndex,
+  sortRows,
+  CATEGORY_LABEL,
+  SORT_LABEL,
+  type AttemptRow,
+  type MockRow,
+  type HistoryCategory,
+  type SortKey,
+} from '../lib/pyqHistory';
 // --- CONFIG ---
 const API_BASE = (typeof import.meta !== "undefined" && (import.meta as any).env?.VITE_API_URL) ||
     (typeof process !== "undefined" && (process.env as any).NEXT_PUBLIC_API_URL) ||
     (typeof process !== "undefined" && (process.env as any).REACT_APP_API_URL) ||
-    "http://localhost:4000"; 
+    "http://localhost:4000";
 
 // --- TYPES ---
 interface UserProfile {
@@ -25,37 +42,77 @@ interface UserProfile {
   createdAt: string;
 }
 
+/**
+ * Both spellings of every stat.
+ *
+ * The page used to read `totalGenerated` and `averageScore` from a payload that
+ * only ever sent `totalTests` and `avgScore`, so two of the four tiles rendered
+ * 0 for everyone forever. The server now sends both names; this type records
+ * that rather than picking one and leaving the other to rot.
+ */
 interface UserStats {
+  totalTests: number;
   totalGenerated: number;
-  totalAttempted: number;
+  attemptedTests: number;
+  avgScore: number;
   averageScore: number;
   bestScore: number;
-  attemptedTests:number;
+  papersSat: number;
 }
 
-interface TestHistory {
-  sessionId: string;
-  examType: string;
-  createdAt: string;
-  scorePercent: number;
-  medium: string;
-}
+const CATEGORIES: HistoryCategory[] = ['pyq', 'mock', 'generated'];
+
+/** Per-category search and sort. The three lists filter independently — a
+ *  search for "Physics" in PYQ has no business narrowing the mock list. */
+type Filters = Record<HistoryCategory, { search: string; sort: SortKey }>;
+
+const EMPTY_FILTERS: Filters = {
+  pyq: { search: '', sort: 'recent' },
+  mock: { search: '', sort: 'recent' },
+  generated: { search: '', sort: 'recent' },
+};
 
 // --- MAIN COMPONENT ---
 export default function ProfilePage() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'overview' | 'history' | 'settings'>('overview');
-  
+
   const [user, setUser] = useState<UserProfile | null>(null);
   const [stats, setStats] = useState<UserStats | null>(null);
-  const [history, setHistory] = useState<TestHistory[]>([]);
+
+  // Three lists, kept apart all the way from the API to the screen.
+  const [pyqTests, setPyqTests] = useState<AttemptRow[]>([]);
+  const [mockTests, setMockTests] = useState<MockRow[]>([]);
+  const [generatedTests, setGeneratedTests] = useState<AttemptRow[]>([]);
+
+  const [category, setCategory] = useState<HistoryCategory>('pyq');
+  const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
+  const [premiumOpen, setPremiumOpen] = useState(false);
 
   // Settings Form State
-  const [photoUrl, setPhotoUrl] = useState(''); 
+  const [photoUrl, setPhotoUrl] = useState('');
   const [bio, setBio] = useState('');
   const [medium, setMedium] = useState('english');
-  
+  /** The exam track, and optionally one exam within it. Editable here only. */
+  const [track, setTrack_] = useState<AudienceId | null>(null);
+  const [focus, setFocus] = useState<string | null>(null);
+  const { audience, options: trackOptions, setTrack, focusExam } = useAudience();
+
+  /**
+   * The exams on the track currently SELECTED IN THIS FORM.
+   *
+   * Read off `track`, not off the provider's `audience`. Those differ the
+   * moment someone picks a different track and has not saved yet, and driving
+   * the list from the provider would offer them the old track's exams to focus
+   * on — a JEE aspirant switching to Government being asked to choose between
+   * JEE Main and NEET.
+   */
+  const trackExams = useMemo(
+    () => examsForAudience(getAudience(track)),
+    [track]
+  );
+
   // Password Reset State
   const [oldPass, setOldPass] = useState('');
   const [newPass, setNewPass] = useState('');
@@ -65,23 +122,49 @@ export default function ProfilePage() {
     fetchProfile();
   }, []);
 
+  /**
+   * Two calls, in parallel.
+   *
+   * The profile carries the user, the stats and the mock tests. The attempts
+   * endpoint carries the PYQ and generated sittings WITH their rank and
+   * percentile, which needs a scan across everyone who sat the same paper —
+   * work the profile header should not wait on. If that second call fails the
+   * page still renders, falling back to the un-ranked copies the profile
+   * already returned rather than showing an empty history, which would read as
+   * "your attempts are gone".
+   */
   const fetchProfile = async () => {
+    setLoading(true);
     try {
-      // ✅ CHANGED: Pointing to the correct User Router endpoint
-      const { data } = await axios.get(`${API_BASE}/api/user/me`, { withCredentials: true });
-      
-      if (data.success) {
-        setUser(data.user);
-        setStats(data.stats);
-        
-        // Map backend 'recentTests' to frontend 'history'
-        setHistory(data.recentTests || []);
-        
-        // Init form state
-        setBio(data.user.bio || '');
-        setPhotoUrl(data.user.photoUrl || '');
-        setMedium(data.user.preferredMedium || 'english');
+      const [profile, attempts] = await Promise.all([
+        axios.get(`${API_BASE}/api/user/me`, { withCredentials: true }),
+        fetchMyAttempts().catch(() => null),
+      ]);
+
+      const data = profile.data;
+      if (!data?.success) throw new Error(data?.message || 'Could not load profile');
+
+      setUser(data.user);
+      setStats(data.stats);
+      setMockTests(data.history?.mock ?? []);
+
+      if (attempts) {
+        setPyqTests(attempts.filter((a) => a.kind === 'pyq'));
+        setGeneratedTests(attempts.filter((a) => a.kind === 'generated'));
+      } else {
+        setPyqTests(data.history?.pyq ?? []);
+        setGeneratedTests(data.history?.generated ?? []);
       }
+
+      // Init form state
+      setBio(data.user.bio || '');
+      setPhotoUrl(data.user.photoUrl || '');
+      setMedium(data.user.preferredMedium || 'english');
+      // The account's copy leads; fall back to whatever the provider resolved
+      // for this browser so the control is never blank for someone who chose a
+      // track before it was stored server-side.
+      setTrack_(data.user.audienceId ?? audience?.id ?? null);
+      setFocus(data.user.focusExam ?? focusExam?.slug ?? null);
     } catch (err) {
       console.error("Profile Load Error:", err);
       toast.error("Failed to load profile. Please login again.");
@@ -90,6 +173,37 @@ export default function ProfilePage() {
       setLoading(false);
     }
   };
+
+  const counts: Record<HistoryCategory, number> = {
+    pyq: pyqTests.length,
+    mock: mockTests.length,
+    generated: generatedTests.length,
+  };
+
+  const rowsFor = (c: HistoryCategory): (AttemptRow | MockRow)[] =>
+    c === 'pyq' ? pyqTests : c === 'mock' ? mockTests : generatedTests;
+
+  const visibleRows = useMemo(() => {
+    const { search, sort } = filters[category];
+    const needle = search.trim().toLowerCase();
+    const matched = needle
+      ? rowsFor(category).filter((r) => searchIndex(r).includes(needle))
+      : rowsFor(category);
+    return sortRows(matched, sort);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [category, filters, pyqTests, mockTests, generatedTests]);
+
+  const setFilter = (patch: Partial<{ search: string; sort: SortKey }>) =>
+    setFilters((f) => ({ ...f, [category]: { ...f[category], ...patch } }));
+
+  /** Newest five across all three categories, for the overview tab. */
+  const recent = useMemo(
+    () =>
+      [...pyqTests, ...mockTests, ...generatedTests]
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        .slice(0, 5),
+    [pyqTests, mockTests, generatedTests]
+  );
 
   // --- UPDATE PROFILE HANDLER ---
   const handleUpdateProfile = async (e: React.FormEvent) => {
@@ -100,19 +214,30 @@ export default function ProfilePage() {
         const payload = {
             bio: bio,
             preferredMedium: medium,
-            photoUrl: photoUrl
+            photoUrl: photoUrl,
+            audienceId: track,
+            // Cleared to null when "All exams on my track" is chosen, which is
+            // why the server tests for `undefined` rather than truthiness.
+            focusExam: track ? focus : null,
         };
 
         // ✅ ACTUAL API CALL
         const { data } = await axios.put(
-            `${API_BASE}/api/user/profile`, 
-            payload, 
+            `${API_BASE}/api/user/profile`,
+            payload,
             { withCredentials: true }
         );
 
         if (data.success) {
             // Update local state immediately
             setUser(prev => prev ? { ...prev, ...payload } : null);
+            // The profile is the ONLY place a track changes now, so the change
+            // has to reach the provider immediately — every listing on the site
+            // is filtered by it, and waiting for the next full page load would
+            // leave the visitor looking at their old track's exams.
+            if (track && (track !== audience?.id || focus !== (focusExam?.slug ?? null))) {
+              setTrack(track, focus);
+            }
             toast.success("Profile updated successfully!");
         } else {
             toast.error(data.message || "Update failed");
@@ -146,6 +271,9 @@ export default function ProfilePage() {
   return (
     <div className="min-h-screen bg-slate-50 py-8 px-4 sm:px-6 font-sans">
       <Toaster position="top-center" reverseOrder={false} />
+      {/* Opened from the Generated Mock Tests tab. Mounted at the page root so
+          it is never clipped by a scrolling tab panel. */}
+      <PremiumDialog open={premiumOpen} onClose={() => setPremiumOpen(false)} />
       <div className="max-w-6xl mx-auto space-y-6">
 
         {/* --- HEADER CARD --- */}
@@ -195,29 +323,32 @@ export default function ProfilePage() {
 
         {/* --- STATS ROW --- */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <StatCard 
-            label="Tests Generated" 
-            value={stats?.totalGenerated || 0} 
-            icon={<BookOpen className="text-blue-600" />} 
-            bg="bg-blue-50" 
+          <StatCard
+            label="Papers Sat"
+            value={stats?.totalTests ?? 0}
+            icon={<BookOpen className="text-blue-600" />}
+            bg="bg-blue-50"
           />
-          <StatCard 
-            label="Tests Attempted" 
-            value={stats?.attemptedTests || 0} // Matches backend response key
-            icon={<Target className="text-green-600" />} 
-            bg="bg-green-50" 
+          <StatCard
+            label="Tests Attempted"
+            value={stats?.attemptedTests ?? 0}
+            icon={<Target className="text-green-600" />}
+            bg="bg-green-50"
           />
-          <StatCard 
-            label="Average Score" 
-            value={`${stats?.averageScore || 0}%`} // Matches backend response key
-            icon={<BarChart2 className="text-violet-600" />} 
-            bg="bg-violet-50" 
+          <StatCard
+            label="Average Score"
+            // Both names are read because the two endpoints that can answer
+            // this page disagree on the spelling. Reading only one is what
+            // pinned this tile to 0% for every user.
+            value={`${stats?.averageScore ?? stats?.avgScore ?? 0}%`}
+            icon={<BarChart2 className="text-violet-600" />}
+            bg="bg-violet-50"
           />
-          <StatCard 
-            label="Best Score" 
-            value={`${stats?.bestScore || 0}%`} 
-            icon={<Trophy className="text-amber-500" />} 
-            bg="bg-amber-50" 
+          <StatCard
+            label="Best Score"
+            value={`${stats?.bestScore ?? 0}%`}
+            icon={<Trophy className="text-amber-500" />}
+            bg="bg-amber-50"
           />
         </div>
 
@@ -238,14 +369,14 @@ export default function ProfilePage() {
             {activeTab === 'overview' && (
               <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}>
                 <h3 className="text-lg font-bold text-slate-800 mb-5">Recent Activity</h3>
-                {history.length > 0 ? (
+                {recent.length > 0 ? (
                   <div className="space-y-3">
-                    {history.slice(0, 5).map((test) => (
-                      <HistoryRow key={test.sessionId} test={test} navigate={navigate} />
+                    {recent.map((test) => (
+                      <HistoryRow key={test.id} test={test} navigate={navigate} />
                     ))}
                   </div>
                 ) : (
-                  <EmptyState navigate={navigate} />
+                  <EmptyState category="pyq" navigate={navigate} onPremium={() => setPremiumOpen(true)} />
                 )}
               </motion.div>
             )}
@@ -253,20 +384,112 @@ export default function ProfilePage() {
             {/* HISTORY TAB */}
             {activeTab === 'history' && (
               <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}>
-                <div className="flex justify-between items-center mb-6">
-                  <h3 className="text-lg font-bold text-slate-800">All Tests</h3>
+                <div className="flex flex-wrap justify-between items-center gap-3 mb-5">
+                  <h3 className="text-lg font-bold text-slate-800">Test History</h3>
                   <button onClick={fetchProfile} className="text-indigo-600 hover:text-indigo-700 text-sm flex items-center gap-1.5 font-medium px-3 py-1.5 rounded-lg hover:bg-indigo-50 transition-colors">
                     <RefreshCw className="h-4 w-4" /> Refresh
                   </button>
                 </div>
-                {history.length > 0 ? (
+
+                {/* The three categories. Shown as a segmented control rather
+                    than a dropdown because the counts are the useful part — a
+                    candidate should be able to see at a glance that they have
+                    sat six real papers and no generated ones. */}
+                <div className="flex flex-wrap gap-2 mb-5">
+                  {CATEGORIES.map((c) => (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => setCategory(c)}
+                      className={`flex items-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-semibold transition ${
+                        category === c
+                          ? 'border-indigo-600 bg-indigo-600 text-white shadow-sm'
+                          : 'border-slate-200 bg-white text-slate-600 hover:border-indigo-300 hover:bg-indigo-50'
+                      }`}
+                    >
+                      {CATEGORY_ICON[c]}
+                      {CATEGORY_LABEL[c]}
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-xs font-bold ${
+                          category === c ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-500'
+                        }`}
+                      >
+                        {counts[c]}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+
+                <p className="mb-4 text-sm text-slate-500">{CATEGORY_BLURB[category]}</p>
+
+                {/* Search and sort, held per category so switching tabs does
+                    not carry one list's filter onto another. */}
+                <div className="flex flex-col gap-3 sm:flex-row mb-5">
+                  <div className="relative flex-1">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                    <input
+                      type="text"
+                      value={filters[category].search}
+                      onChange={(e) => setFilter({ search: e.target.value })}
+                      placeholder={
+                        category === 'mock'
+                          ? 'Search by exam or difficulty…'
+                          : 'Search by exam, year, session, shift or subject…'
+                      }
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-10 text-sm text-slate-700 outline-none transition-all focus:border-indigo-500 focus:bg-white focus:ring-2 focus:ring-indigo-200"
+                    />
+                    {filters[category].search && (
+                      <button
+                        type="button"
+                        onClick={() => setFilter({ search: '' })}
+                        aria-label="Clear search"
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    )}
+                  </div>
+                  <select
+                    value={filters[category].sort}
+                    onChange={(e) => setFilter({ sort: e.target.value as SortKey })}
+                    aria-label="Sort tests"
+                    className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm font-medium text-slate-700 outline-none transition-all focus:border-indigo-500 focus:bg-white focus:ring-2 focus:ring-indigo-200 sm:w-52"
+                  >
+                    {(Object.keys(SORT_LABEL) as SortKey[]).map((k) => (
+                      <option key={k} value={k}>{SORT_LABEL[k]}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {visibleRows.length > 0 ? (
                   <div className="space-y-3">
-                    {history.map((test) => (
-                      <HistoryRow key={test.sessionId} test={test} navigate={navigate} />
+                    {visibleRows.map((test) => (
+                      <HistoryRow key={test.id} test={test} navigate={navigate} />
                     ))}
                   </div>
+                ) : counts[category] > 0 ? (
+                  // Filtered to nothing is not the same as having nothing, and
+                  // showing "no tests taken yet" to someone with six would be a
+                  // lie about their own history.
+                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 py-12 text-center">
+                    <Search className="mx-auto h-7 w-7 text-slate-300" />
+                    <p className="mt-3 font-semibold text-slate-700">
+                      No {CATEGORY_LABEL[category].toLowerCase()} match “{filters[category].search}”
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setFilter({ search: '' })}
+                      className="mt-3 text-sm font-bold text-indigo-600 underline"
+                    >
+                      Clear the search
+                    </button>
+                  </div>
                 ) : (
-                  <EmptyState navigate={navigate} />
+                  <EmptyState
+                    category={category}
+                    navigate={navigate}
+                    onPremium={() => setPremiumOpen(true)}
+                  />
                 )}
               </motion.div>
             )}
@@ -311,6 +534,71 @@ export default function ProfilePage() {
                             </div>
                         </div>
                     </div>
+                  </div>
+
+                  {/* THE track control.
+                      It lives here and only here. Every exam list, the
+                      generator's dropdown and the career tools are filtered by
+                      it, so changing it is a deliberate act on the profile
+                      rather than a stray click on a "show me everything" link
+                      buried in a listing. */}
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700 mb-1.5">
+                      What are you preparing for?
+                    </label>
+                    <div className="space-y-2">
+                      {trackOptions.map((opt) => (
+                        <label
+                          key={opt.id}
+                          className={`flex cursor-pointer items-start gap-3 rounded-xl border p-3 transition ${
+                            track === opt.id
+                              ? 'border-indigo-500 bg-indigo-50'
+                              : 'border-slate-200 hover:border-indigo-300 hover:bg-slate-50'
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            name="track"
+                            checked={track === opt.id}
+                            onChange={() => setTrack_(opt.id)}
+                            className="mt-1 h-4 w-4 accent-indigo-600"
+                          />
+                          <span className="min-w-0">
+                            <span className="block text-sm font-semibold text-slate-800">{opt.label}</span>
+                            <span className="block text-xs leading-relaxed text-slate-500">{opt.tagline}</span>
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                    <p className="mt-2 text-xs text-slate-400">
+                      This decides which exams and tools you see, on every device you sign in from.
+                    </p>
+
+                    {/* Narrow further to ONE exam. Separate from the track
+                        because they answer different questions: the track is
+                        what kind of candidate you are, this is which paper you
+                        are actually sitting. Naming one hides the others
+                        entirely — clearing it brings the whole track back. */}
+                    {trackExams.length > 1 && (
+                      <div className="mt-4">
+                        <label className="block text-sm font-semibold text-slate-700 mb-1.5">
+                          Focus on one exam
+                        </label>
+                        <select
+                          value={focus ?? ''}
+                          onChange={(e) => setFocus(e.target.value || null)}
+                          className="w-full p-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none cursor-pointer"
+                        >
+                          <option value="">All {trackExams.length} exams on my track</option>
+                          {trackExams.map((e) => (
+                            <option key={e.slug} value={e.slug}>{e.name} only</option>
+                          ))}
+                        </select>
+                        <p className="mt-1.5 text-xs text-slate-400">
+                          Pick one and the rest are hidden everywhere on the site.
+                        </p>
+                      </div>
+                    )}
                   </div>
 
                   <div>
@@ -429,57 +717,210 @@ const TabButton = ({ label, active, onClick }: any) => (
   </button>
 );
 
-const HistoryRow = ({ test, navigate }: any) => (
-  <div className="group flex flex-col sm:flex-row sm:items-center justify-between p-5 bg-white rounded-xl border border-slate-100 hover:border-indigo-200 hover:shadow-md transition-all duration-300 gap-4">
-    <div className="flex items-start sm:items-center gap-4">
-      <div className={`mt-1.5 sm:mt-0 h-3 w-3 rounded-full flex-shrink-0 ${test.scorePercent >= 50 ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.4)]' : 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.4)]'}`} />
-      <div>
-        <h4 className="font-bold text-slate-800 text-lg group-hover:text-indigo-700 transition-colors">{test.examType}</h4>
-        <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500 mt-1">
-          <span className="flex items-center gap-1 bg-slate-100 px-2 py-1 rounded-md font-medium"><Clock className="h-3 w-3"/> {new Date(test.createdAt).toLocaleDateString()}</span>
-          <span className="px-2 py-1 bg-indigo-50 text-indigo-700 rounded-md font-bold uppercase text-[10px] tracking-wide">{test.medium}</span>
+const CATEGORY_ICON: Record<HistoryCategory, React.ReactNode> = {
+  pyq: <FileText className="h-4 w-4" />,
+  mock: <BookOpen className="h-4 w-4" />,
+  generated: <Sparkles className="h-4 w-4" />,
+};
+
+const CATEGORY_BLURB: Record<HistoryCategory, string> = {
+  pyq: 'Real papers you sat exactly as they were printed — every question, in order, under the original marking scheme.',
+  mock: 'Mock papers you configured yourself on the generate screen: your exam, your topics, your question count.',
+  generated: 'Balanced papers drawn automatically from the question bank to the official exam pattern.',
+};
+
+/**
+ * One row of history.
+ *
+ * Handles all three categories rather than three near-identical components,
+ * because they differ in only two places: what identifies the paper, and where
+ * "review" goes. A mock test is a TestSession and reviews at
+ * /tests/:id/result; a PYQ or generated attempt is a PyqAttempt and reviews at
+ * /pyq/attempt/:id. Sending the second kind to the first route is what made
+ * every real paper's "view result" button 404.
+ */
+const HistoryRow = ({ test, navigate }: { test: AttemptRow | MockRow; navigate: any }) => {
+  const isMock = test.kind === 'mock';
+  const percent = isMock ? (test as MockRow).scorePercent : (test as AttemptRow).percent;
+  const attempted = percent != null;
+
+  const attempt = test as AttemptRow;
+  const mock = test as MockRow;
+
+  const title = isMock
+    ? mock.examType
+    : [attempt.examName, attempt.year].filter(Boolean).join(' ');
+
+  // The facets that identify WHICH paper this was — session, date, shift and,
+  // for a single-subject draw, the subject. Without them a history of six JEE
+  // Main papers is six identical rows.
+  //
+  // Attempts recorded before those became columns carry only the joined
+  // `label`, so that is the fallback. Deliberately NOT parsed back apart: the
+  // string is already exactly what we would render, and splitting it on " · "
+  // would break the moment a shift label contained one.
+  const discreteFacets = [
+    attempt.sessionLabel,
+    attempt.dateLabel,
+    attempt.shiftLabel,
+    attempt.subject,
+  ];
+  const facets = isMock
+    ? [mock.difficulty, `${mock.totalQuestions} questions`, SOURCE_LABEL[mock.sourceType] ?? mock.sourceType]
+    : discreteFacets.some(Boolean)
+      ? discreteFacets
+      : [attempt.label, attempt.subject];
+
+  const reviewHref = isMock ? `/tests/${mock.sessionId}/result` : `/pyq/attempt/${attempt.id}`;
+
+  return (
+    <div className="group flex flex-col sm:flex-row sm:items-center justify-between p-5 bg-white rounded-xl border border-slate-100 hover:border-indigo-200 hover:shadow-md transition-all duration-300 gap-4">
+      <div className="flex items-start gap-4 min-w-0">
+        <div
+          className={`mt-2 h-3 w-3 rounded-full flex-shrink-0 ${
+            !attempted
+              ? 'bg-slate-300'
+              : percent! >= 50
+                ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.4)]'
+                : 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.4)]'
+          }`}
+        />
+        <div className="min-w-0">
+          <h4 className="font-bold text-slate-800 text-lg group-hover:text-indigo-700 transition-colors">
+            {title}
+          </h4>
+
+          {facets.filter(Boolean).length > 0 && (
+            <p className="mt-0.5 text-sm text-slate-600 truncate">
+              {facets.filter(Boolean).join(' · ')}
+            </p>
+          )}
+
+          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 mt-2">
+            <span className="flex items-center gap-1 bg-slate-100 px-2 py-1 rounded-md font-medium">
+              <Clock className="h-3 w-3" /> {fmtDate(test.createdAt)}
+            </span>
+            {!isMock && attempt.timeTakenSeconds != null && (
+              <span className="flex items-center gap-1 bg-slate-100 px-2 py-1 rounded-md font-medium">
+                <Timer className="h-3 w-3" /> {hhmmss(attempt.timeTakenSeconds)}
+              </span>
+            )}
+            {/* Only rendered once enough other candidates have sat the same
+                paper — the server withholds it below that, so an absent
+                percentile means "not enough data", never "zero". */}
+            {!isMock && attempt.percentile != null && (
+              <span className="flex items-center gap-1 bg-indigo-50 text-indigo-700 px-2 py-1 rounded-md font-bold">
+                <Award className="h-3 w-3" /> {attempt.percentile} percentile
+                {attempt.rank != null && ` · rank ${attempt.rank}/${attempt.outOf}`}
+              </span>
+            )}
+            {!attempted && (
+              <span className="px-2 py-1 bg-amber-50 text-amber-700 rounded-md font-bold uppercase text-[10px] tracking-wide">
+                Not attempted
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between sm:justify-end gap-6 w-full sm:w-auto pl-7 sm:pl-0 border-t sm:border-0 border-slate-100 pt-3 sm:pt-0">
+        <div className="text-left sm:text-right">
+          <span className="block text-xl font-black text-slate-900">
+            {attempted ? `${percent}%` : '—'}
+          </span>
+          <span className="text-xs text-slate-400 font-bold uppercase tracking-wider">
+            {isMock
+              ? `${mock.correct}/${mock.totalQuestions}`
+              : `${attempt.score}/${attempt.totalMarks} marks`}
+          </span>
+        </div>
+
+        <div className="flex gap-2">
+          <button
+            onClick={() => navigate(reviewHref)}
+            className="p-2.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition-colors border border-transparent hover:border-indigo-100"
+            title="Review questions, answers and solutions"
+            aria-label="Review this attempt"
+          >
+            <Eye className="h-5 w-5" />
+          </button>
+          {/* Retaking is offered where it means something. A mock test can be
+              re-run and a real paper can be sat again; a generated paper was a
+              one-off draw, and "retake" would hand over a different paper
+              under the same name. */}
+          {test.kind !== 'generated' && (
+            <button
+              onClick={() =>
+                navigate(isMock ? `/tests/${mock.sessionId}` : `/pyq/${attempt.paperId}`)
+              }
+              className="p-2.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition-colors border border-transparent hover:border-indigo-100"
+              title="Sit this paper again"
+              aria-label="Sit this paper again"
+            >
+              <RefreshCw className="h-5 w-5" />
+            </button>
+          )}
         </div>
       </div>
     </div>
-    
-    <div className="flex items-center justify-between sm:justify-end gap-6 w-full sm:w-auto pl-7 sm:pl-0 border-t sm:border-0 border-slate-100 pt-3 sm:pt-0">
-      <div className="text-left sm:text-right">
-        <span className="block text-xl font-black text-slate-900">{test.scorePercent ?? 0}%</span>
-        <span className="text-xs text-slate-400 font-bold uppercase tracking-wider">Score</span>
-      </div>
-      
-      <div className="flex gap-2">
-        <button 
-          onClick={() => navigate(`/tests/${test.sessionId}/result`)}
-          className="p-2.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition-colors border border-transparent hover:border-indigo-100" 
-          title="View Result"
-        >
-          <Eye className="h-5 w-5" />
-        </button>
-        <button 
-          onClick={() => navigate(`/tests/${test.sessionId}`)}
-          className="p-2.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition-colors border border-transparent hover:border-indigo-100" 
-          title="Retake Test"
-        >
-          <RefreshCw className="h-5 w-5" />
-        </button>
-      </div>
-    </div>
-  </div>
-);
+  );
+};
 
-const EmptyState = ({ navigate }: any) => (
-  <div className="text-center py-16 flex flex-col items-center bg-slate-50 rounded-2xl border border-dashed border-slate-200">
-    <div className="bg-white p-4 rounded-full mb-4 shadow-sm">
-      <BookOpen className="h-8 w-8 text-indigo-400" />
+/** What a TestSession's sessionType means to a reader. */
+const SOURCE_LABEL: Record<string, string> = {
+  mock: 'Full mock · AI',
+  practice: 'Practice · AI',
+  pyq: 'Built from previous year questions',
+};
+
+/** Each category gets its own way out, because they are reached differently. */
+const EmptyState = ({
+  category,
+  navigate,
+  onPremium,
+}: {
+  category: HistoryCategory;
+  navigate: any;
+  onPremium: () => void;
+}) => {
+  const copy = {
+    pyq: {
+      title: 'No previous year papers sat yet',
+      body: 'Pick an exam, year and shift and sit the real paper under the original clock and marking scheme. Every attempt is saved here.',
+      cta: 'Browse previous year papers',
+      action: () => navigate('/pyq'),
+    },
+    mock: {
+      title: 'No mock tests yet',
+      body: 'Build a paper around your own exam, topics, difficulty and question count.',
+      cta: 'Create a mock test',
+      action: () => navigate('/GenerateTestPage'),
+    },
+    generated: {
+      title: 'No generated mock tests yet',
+      body: 'Balanced papers drawn straight from the question bank in the official exam pattern.',
+      cta: 'Generate a mock test',
+      action: onPremium,
+    },
+  }[category];
+
+  return (
+    <div className="text-center py-16 flex flex-col items-center bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+      <div className="bg-white p-4 rounded-full mb-4 shadow-sm">
+        {category === 'generated' ? (
+          <Sparkles className="h-8 w-8 text-indigo-400" />
+        ) : (
+          <BookOpen className="h-8 w-8 text-indigo-400" />
+        )}
+      </div>
+      <h3 className="text-lg font-bold text-slate-900">{copy.title}</h3>
+      <p className="text-slate-500 mb-6 max-w-sm mx-auto leading-relaxed px-4">{copy.body}</p>
+      <button
+        onClick={copy.action}
+        className="px-8 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 transform hover:-translate-y-0.5"
+      >
+        {copy.cta}
+      </button>
     </div>
-    <h3 className="text-lg font-bold text-slate-900">No tests taken yet</h3>
-    <p className="text-slate-500 mb-6 max-w-xs mx-auto leading-relaxed">Generate your first test to start tracking your performance analytics and progress.</p>
-    <button 
-      onClick={() => navigate('/GenerateTestPage')}
-      className="px-8 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 transform hover:-translate-y-0.5"
-    >
-      Create New Test
-    </button>
-  </div>
-);
+  );
+};

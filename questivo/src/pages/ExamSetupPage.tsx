@@ -29,8 +29,9 @@
  * silently padded paper is not.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useAudience } from "../componenets/AudienceProvider";
 import {
   emptySelection,
   fetchAvailability,
@@ -62,6 +63,7 @@ const STEPS = ["Exam", "Type", "Filters", "Preview", "Start"] as const;
 
 export default function ExamSetupPage() {
   const navigate = useNavigate();
+  const { visibleExams } = useAudience();
 
   const [exams, setExams] = useState<ExamOption[]>([]);
   const [examCode, setExamCode] = useState<string | null>(null);
@@ -180,7 +182,33 @@ export default function ExamSetupPage() {
 
   /* -------------------------------- render ------------------------------- */
 
-  const exam = exams.find((e) => e.examCode === examCode) ?? null;
+  /**
+   * The exam list, narrowed to the candidate's track.
+   *
+   * THE SAME HOLE PyqPapersPage HAD.
+   *
+   * Fixing the archive listing left this one behind: /api/pyq/exams returns
+   * every exam the bank holds, so a JEE/NEET aspirant opening "Set up a test"
+   * was still offered GATE Metallurgical Engineering — the exact thing the
+   * track exists to stop, one screen over.
+   *
+   * Matched on `pyqExamCode`, not on names: the bank says "JEE_MAIN" while
+   * lib/exams.ts says "NTA_JEE_MAIN_2025", and fuzzy-matching those two
+   * vocabularies is how the wrong exam gets through.
+   *
+   * Never narrows to nothing — a track whose exams have no questions stored
+   * would otherwise render a chooser with no choices and no explanation. An
+   * untracked visitor sees everything, because `visibleExams` is already the
+   * full list for them.
+   */
+  const listedExams = useMemo(() => {
+    const allowed = new Set(visibleExams.map((e) => e.pyqExamCode).filter(Boolean));
+    if (!allowed.size) return exams;
+    const narrowed = exams.filter((e) => allowed.has(e.examCode));
+    return narrowed.length ? narrowed : exams;
+  }, [exams, visibleExams]);
+
+  const exam = listedExams.find((e) => e.examCode === examCode) ?? null;
   const fullTest = fullTests.find((f) => f.examCode === examCode) ?? null;
 
   return (
@@ -202,7 +230,7 @@ export default function ExamSetupPage() {
       {/* ── step 1: exam ─────────────────────────────────────────────────── */}
       <Section n={1} title="Select exam" done={Boolean(examCode)}>
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-          {exams.map((e) => (
+          {listedExams.map((e) => (
             <button
               key={e.examCode}
               type="button"
@@ -224,7 +252,7 @@ export default function ExamSetupPage() {
               </div>
             </button>
           ))}
-          {!exams.length && <Skeleton rows={3} />}
+          {!listedExams.length && <Skeleton rows={3} />}
         </div>
       </Section>
 

@@ -64,22 +64,79 @@ export function subjectFor(n) {
   return SUBJECT_BLOCKS.find((b) => n >= b.from && n <= b.to)?.subject ?? null;
 }
 
+/**
+ * Where the real options begin.
+ *
+ * A question that lists numbered statements and then asks you to pick among
+ * combinations of them is full of decoy markers:
+ *
+ *   (1) The average kinetic energy ... decreases when the temperature is reduced.
+ *   ...
+ *   Choose the correct answer from the options given below :
+ *   (1) (1) and (4) only        (2) (1), (2) and (4) only
+ *
+ * The marker sequence there is 1,2,3,4,1,1,4,2,1,2,4,3,... — the statements
+ * form a clean 1-2-3-4 run and the actual options do not, because each option's
+ * own text contains markers. Searching for a run therefore picks the
+ * statements, and the paper renders with its statements as its choices.
+ *
+ * These papers always print an instruction line first, so the options are
+ * whatever comes after it.
+ */
+const CHOOSE_LINE =
+  /Choose the (?:correct|most appropriate|right)[^:\n]{0,80}:|from the options given below\s*:?/i;
+
 /** Pull "(1) … (2) … (3) … (4) …" out of a question body. */
 function splitOptions(text) {
+  const instruction = CHOOSE_LINE.exec(text);
+  const from = instruction ? instruction.index + instruction[0].length : 0;
+
   // (?<!\^) so an exponent the joiner produced — "5^(3)" — is never mistaken
   // for option 3.
-  const marks = [...text.matchAll(/(?<!\^)\((\d)\)/g)].filter((m) => "1234".includes(m[1]));
+  const marks = [...text.matchAll(/(?<!\^)\((\d)\)/g)]
+    .filter((m) => "1234".includes(m[1]) && m.index >= from);
   if (marks.length < 4) return null;
 
-  // Last ascending 1-2-3-4 run wins, so a "(1)" quoted inside the stem does not
-  // capture the parse.
-  let start = -1;
-  for (let i = 0; i + 3 < marks.length; i++) {
-    if (marks.slice(i, i + 4).every((m, k) => m[1] === String(k + 1))) start = i;
-  }
-  if (start < 0) return null;
+  // Choose the four markers that carve the text into the most even pieces.
+  //
+  // A run of four CONSECUTIVE markers reading 1,2,3,4 does not exist in these
+  // questions: each option's own text contains markers, so
+  // "(1) (1) and (4) only  (2) (1), (2) and (4) only" yields
+  // 1,1,4,2,1,2,4,3,2,4,4,1,2 and the whole question came back optionless.
+  // Taking the first of each number in turn is not right either — it lands on
+  // the "(4)" inside option 3's text and cuts that option in half.
+  //
+  // What separates a real marker from a decoy is spacing: four options divide
+  // the text into four substantial pieces, while a decoy sits a few characters
+  // from its neighbour. So every ascending 1-2-3-4 assignment is scored by its
+  // SHORTEST piece, and the most even one wins. Marker counts here are small,
+  // so the search is cheap.
+  const at = (d) => marks.filter((m) => m[1] === d);
+  let run = null;
+  let best = -1;
 
-  const run = marks.slice(start, start + 4);
+  for (const m1 of at("1")) {
+    for (const m2 of at("2")) {
+      if (m2.index <= m1.index) continue;
+      for (const m3 of at("3")) {
+        if (m3.index <= m2.index) continue;
+        for (const m4 of at("4")) {
+          if (m4.index <= m3.index) continue;
+          const score = Math.min(
+            m2.index - m1.index,
+            m3.index - m2.index,
+            m4.index - m3.index,
+            text.length - m4.index
+          );
+          if (score > best) {
+            best = score;
+            run = [m1, m2, m3, m4];
+          }
+        }
+      }
+    }
+  }
+  if (!run) return null;
   const options = {};
   for (let i = 0; i < 4; i++) {
     const from = run[i].index + run[i][0].length;

@@ -33,7 +33,7 @@ function trackSummary(a: Audience): string {
 }
 
 const AudienceGate: React.FC = () => {
-  const { needsChoice, options, setTrack, dismissChoice } = useAudience();
+  const { needsChoice, options, setTrack } = useAudience();
   const ref = useRef<HTMLDialogElement>(null);
   const [picked, setPicked] = useState<AudienceId | null>(null);
 
@@ -44,18 +44,27 @@ const AudienceGate: React.FC = () => {
     if (!needsChoice && el.open) el.close();
   }, [needsChoice]);
 
-  // Escape and backdrop both mean "don't narrow anything" rather than "ask me
-  // again on every page", which would be the more annoying reading.
+  /**
+   * Escape closes the dialog for THIS PAGE VIEW only.
+   *
+   * It used to call dismissChoice(), which wrote a permanent "show me
+   * everything" flag — so one stray Escape keypress on a first visit turned the
+   * narrowing off for good, on every future visit, with nothing on screen to
+   * say it had happened or how to undo it. A visitor who is not ready to answer
+   * should be able to close a modal without that being a silent, permanent
+   * product setting. The question comes back on the next page load, and picking
+   * a track is the only thing that stops it.
+   */
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     const cancel = (e: Event) => {
       e.preventDefault();
-      dismissChoice();
+      el.close();
     };
     el.addEventListener("cancel", cancel);
     return () => el.removeEventListener("cancel", cancel);
-  }, [dismissChoice]);
+  }, []);
 
   useEffect(() => {
     if (!needsChoice) return;
@@ -115,13 +124,17 @@ const AudienceGate: React.FC = () => {
               })}
             </div>
 
-            <button
-              type="button"
-              onClick={dismissChoice}
-              className="mt-5 text-sm font-medium underline muted"
-            >
-              Skip — show me everything
-            </button>
+            {/* "Skip — show me everything" used to sit here.
+
+                It was removed on purpose. It set a permanent flag that turned
+                the narrowing off for good, so the commonest way to end up
+                looking at every exam on the site was to have clicked one button
+                once, months ago, and forgotten. Picking a track is a five
+                second decision and the profile can change it any time, so the
+                escape hatch cost more than it bought. */}
+            <p className="mt-5 text-sm muted">
+              You can change this any time from your profile.
+            </p>
           </>
         ) : (
           <>

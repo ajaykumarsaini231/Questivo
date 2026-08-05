@@ -57,7 +57,7 @@ const HomePage: React.FC = () => {
 
   // The visitor's track. Until it has been read this returns every exam and
   // allows every feature, which is what the prerendered homepage contains.
-  const { visibleExams, allExams, can, audience, focusExam } = useAudience();
+  const { visibleExams, allExams, can, audience, focusExam, lockedToTrack } = useAudience();
 
  const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:4000';
 
@@ -366,12 +366,15 @@ const HomePage: React.FC = () => {
                 {focusExam
                   ? `Leading with ${focusExam.name}, the exam you told us you're preparing for.`
                   : audience
-                    ? "The exams on your track. Everything else is one click away."
+                    ? "The exams you're preparing for. Change your track any time from your profile."
                     : "Popular exams taken by students this week."}
               </p>
+              {/* Counts the exams the visitor can actually reach. Offering
+                  "see all 7 exams" to someone locked to a 3-exam track is a
+                  promise the directory then does not keep. */}
               <Link to="/exams" className="btn btn-secondary btn-sm mt-6">
-                {audience
-                  ? `See all ${allExams.length} exams`
+                {lockedToTrack
+                  ? `Browse ${visibleExams.length} exam${visibleExams.length === 1 ? "" : "s"}`
                   : `See all ${allExams.length} exams`}{" "}
                 <ChevronRight className="h-4 w-4" />
               </Link>

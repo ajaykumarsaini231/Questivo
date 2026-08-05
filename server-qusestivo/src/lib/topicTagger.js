@@ -468,6 +468,102 @@ const GATE_METALLURGY = {
   ],
 };
 
+/**
+ * The level below a GATE syllabus area — what a candidate actually revises.
+ *
+ * "Physical Metallurgy" is a week's work; "Phase Diagram" is an evening's. A
+ * practice paper is only useful if it can be narrowed to the second, so the
+ * areas above are subdivided here and the chapter is stored alongside the
+ * topic. Keyed by the area, because the same word means different things in
+ * different ones — "Forming" is a manufacturing process, and a question about
+ * how a phase forms is not about it.
+ *
+ * Only areas whose chapters are genuinely separable appear. Where a question
+ * matches the area but no chapter within it, the chapter is simply left unset:
+ * a wrong chapter sends a candidate revising fatigue into a paper on creep.
+ */
+const GATE_MT_CHAPTERS = {
+  "Physical Metallurgy": {
+    "Crystal Structure": [
+      [/\b(BCC|FCC|HCP|body[- ]cent(e)?red|face[- ]cent(e)?red|close[- ]packed)\b/i, 3],
+      [/\b(miller indices|bravais|unit cell|lattice parameter|coordination number|packing (factor|fraction))\b/i, 3],
+      [/\b(x-?ray diffraction|bragg|interplanar spacing)\b/i, 3],
+    ],
+    Defects: [
+      [/\b(burgers vector|dislocation|screw dislocation|edge dislocation|stacking fault)\b/i, 3],
+      [/\b(vacanc|interstitial|substitutional|point defect|schottky|frenkel)\b/i, 3],
+      [/\b(grain boundary|twin boundary|tilt boundary)\b/i, 2],
+    ],
+    "Phase Diagram": [
+      [/\b(eutectic|eutectoid|peritectic|peritectoid|monotectic)\b/i, 3],
+      [/\b(lever rule|tie[- ]line|phase rule|liquidus|solidus|solvus)\b/i, 3],
+      [/\b(binary phase diagram|iron[- ]carbon|Fe-?Fe3C)\b/i, 3],
+    ],
+    "Heat Treatment": [
+      [/\b(annealing|normalis|quench|temper|austemper|martemper|hardenab|jominy)\b/i, 3],
+      [/\b(TTT|CCT|isothermal transformation|continuous cooling)\b/, 3],
+      [/\b(martensit|bainit|pearlit|spheroidis|case harden|carburis|nitrid)/i, 3],
+      [/\b(precipitation harden|age harden|solution treat|recrystallis)/i, 2],
+    ],
+  },
+  "Mechanical Metallurgy": {
+    "Stress Strain": [
+      [/\b(true stress|engineering stress|stress[- ]strain curve|yield (strength|point|criterion))\b/i, 3],
+      [/\b(von mises|tresca|strain harden|work harden|necking|elongation)\b/i, 3],
+      [/\b(young'?s modulus|elastic modulus|poisson'?s ratio|hooke)\b/i, 2],
+      [/\b(hall[- ]petch|hardness|brinell|vickers|rockwell)\b/i, 2],
+    ],
+    Fatigue: [
+      [/\b(fatigue|s-?n curve|endurance limit|paris law|stress amplitude|cyclic load)\b/i, 3],
+      [/\b(goodman|soderberg|mean stress|striation)\b/i, 3],
+    ],
+    Fracture: [
+      [/\b(fracture toughness|K ?IC|griffith|stress intensity factor|crack (growth|propagat|length))\b/i, 3],
+      [/\b(ductile[- ]brittle transition|charpy|izod|impact (energy|test)|cleavage|dimple)\b/i, 3],
+    ],
+    Creep: [
+      [/\b(creep|larson[- ]miller|stress rupture|steady[- ]state creep|primary creep|tertiary creep)\b/i, 3],
+      [/\b(nabarro[- ]herring|coble creep|dislocation climb)\b/i, 3],
+    ],
+  },
+  "Manufacturing Processes": {
+    Casting: [
+      [/\b(sand cast|investment cast|die cast|continuous cast|riser|gating|sprue|runner)\b/i, 3],
+      [/\b(chvorinov|solidification time|shrinkage (cavity|allowance)|porosity|mould|mold)\b/i, 3],
+    ],
+    Welding: [
+      [/\b(weld|arc welding|MIG|TIG|GMAW|GTAW|SMAW|submerged arc|resistance welding|brazing|soldering)\b/i, 3],
+      [/\b(heat affected zone|HAZ|weld pool|filler (metal|rod)|penetration|carbon equivalent)\b/i, 3],
+    ],
+    Forming: [
+      [/\b(rolling|forging|extrusion|wire drawing|deep drawing|sheet metal|bending|spring ?back)\b/i, 3],
+      [/\b(roll (gap|force|separating)|bite angle|reduction ratio|neutral (point|plane))\b/i, 3],
+    ],
+    "Powder Metallurgy": [
+      [/\bpowder metallurgy\b/i, 3],
+      [/\b(green (compact|strength|density)|sinter(ing)? (temperature|of)|compaction pressure|atomis)/i, 3],
+    ],
+  },
+  "Extractive Metallurgy": {
+    "Iron Making": [
+      [/\b(blast furnace|tuyere|bosh|coke rate|burden|sinter plant|pellet|direct reduc|sponge iron|DRI)\b/i, 3],
+      [/\b(iron ?making|hot metal|pig iron)\b/i, 3],
+    ],
+    "Steel Making": [
+      [/\b(BOF|basic oxygen|LD converter|electric arc furnace|EAF|ladle (metallurgy|furnace)|tundish)\b/i, 3],
+      [/\b(steel ?making|dephosphoris|desulphuris|decarburis|deoxidat|killed steel|slag basicity)\b/i, 3],
+    ],
+    "Non-ferrous": [
+      [/\b(hall[- ]h[eé]roult|bayer process|alumina|aluminium extraction|copper (extraction|smelting)|matte|converting)\b/i, 3],
+      [/\b(zinc|lead|nickel|titanium|kroll|electrowinning|electrorefining|leach|cyanidation|solvent extraction)\b/i, 3],
+    ],
+    "Mineral Processing": [
+      [/\b(froth flotation|comminution|beneficiation|crushing|grinding|ball mill|jaw crusher)\b/i, 3],
+      [/\b(magnetic separation|gravity separation|classification|screening|liberation|collector|frother)\b/i, 3],
+    ],
+  },
+};
+
 const TABLES = {
   "JEE_MAIN:Mathematics": JEE_MATHS,
   "GATE_MT:Metallurgical Engineering": GATE_METALLURGY,

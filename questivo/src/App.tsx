@@ -23,6 +23,9 @@ import Seo from "./componenets/Seo";
 import { AudienceProvider, useAudience } from "./componenets/AudienceProvider";
 import AudienceGate from "./componenets/AudienceGate";
 import FeatureGate from "./componenets/FeatureGate";
+// Eager, like the other route wrappers: it decides whether a route renders at
+// all, so it cannot itself arrive in a lazy chunk after the page has painted.
+import PremiumRoute from "./componenets/PremiumRoute";
 import HomePage from "./componenets/HomePage";
 import GenerateTestPage from "./componenets/selectpage";
 import ResumeATSPage from "./pages/Resume_score";
@@ -76,6 +79,9 @@ const SessionDetailsPage = lazy(() =>
 );
 const PendingUsersPage = lazy(() =>
   import("./pages/PendingUsersPage").then((m) => ({ default: m.PendingUsersPage }))
+);
+const PyqAdminPage = lazy(() =>
+  import("./pages/PyqAdminPage").then((m) => ({ default: m.PyqAdminPage }))
 );
 
 /** Shown only while a split chunk downloads — never on a prerendered route. */
@@ -149,7 +155,20 @@ export function AppContent() {
         {/* Still live, just no longer promoted in the nav — it is the second
             option under "Generate a paper" on the previous year papers page.
             See lib/featureFlags.ts. */}
-        <Route path="/GenerateTestPage" element={<GenerateTestPage />} />
+        {/* The AI writer. Behind the operator's switch, not a frontend
+            constant: PREMIUM_AI_GENERATION in the API's environment moves this
+            route, the menu entry, the badge and the endpoint together. While it
+            is off the page never renders its form — it points at the free
+            PYQ-backed builder at /pyq/setup instead, which is a paper the
+            visitor can actually have. */}
+        <Route
+          path="/GenerateTestPage"
+          element={
+            <PremiumRoute feature="aiGeneration" title="AI paper generation">
+              <GenerateTestPage />
+            </PremiumRoute>
+          }
+        />
         <Route path="/profile" element={<ProfilePage />} />
         <Route path="/my-reports" element={<MyReportsPage />} />
         {/* Career tools are gated by track rather than removed from the router:
@@ -209,6 +228,14 @@ export function AppContent() {
             
             <Route path="categories" element={<CategoriesPage />} />
             <Route path="pending-users" element={<PendingUsersPage />} />
+
+            {/* The PYQ question bank. Both paths render the same screen: the
+                editor is a drawer over the table, so "/pyq/:id" is the table
+                with that row open — which keeps the queue visible behind it,
+                makes a row a shareable link, and makes Back close the drawer
+                rather than leave the screen. */}
+            <Route path="pyq" element={<PyqAdminPage />} />
+            <Route path="pyq/:id" element={<PyqAdminPage />} />
           </Route>
 
         </Route>

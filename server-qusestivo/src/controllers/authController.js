@@ -9,6 +9,7 @@ import {
 
 import { doHash, dohashValidation, hmacProcess } from "../utills/hashing.js";
 import { transport } from "../middleware/sendmail.js";
+import { guardOtpSend, OTP_PURPOSES } from "../lib/otpThrottle.js";
 
 /**
  * Strip secrets before a user row crosses the network.
@@ -59,6 +60,12 @@ export const signup = async (req, res) => {
 
     const exists = await prisma.user.findUnique({ where: { email } });
     if (exists) return res.status(400).json({ message: "User already exists" });
+
+    // Throttled BEFORE the pending row is touched. Checking afterwards would
+    // let a refused request still wipe the pending signup the caller already
+    // had, which is a denial of service against the victim rather than against
+    // the attacker.
+    if (!(await guardOtpSend(req, res, { identifier: email, purpose: OTP_PURPOSES.SIGNUP }))) return;
 
     await prisma.pendingUser.deleteMany({ where: { email } });
 
@@ -205,6 +212,12 @@ export const sendLoginOtp = async (req, res) => {
   try {
     const { email } = req.body;
 
+    // The throttle runs before the account lookup on purpose. Looking up first
+    // means an attacker can probe which addresses have accounts at any rate
+    // they like — the 404 below already leaks that, and letting it be probed
+    // for free makes the leak enumerable in bulk.
+    if (!(await guardOtpSend(req, res, { identifier: email, purpose: OTP_PURPOSES.LOGIN }))) return;
+
     const user = await prisma.user.findUnique({ where: { email } });
     if (!user) return res.status(404).json({ message: "User not found" });
 
@@ -310,6 +323,11 @@ export const sendResetOtp = async (req, res) => {
   try {
     const { email } = req.body;
 
+    // Its own purpose bucket, so exhausting password-reset codes cannot also
+    // lock the account out of logging in. A rate limit that denies the real
+    // owner their normal route in has become the attack.
+    if (!(await guardOtpSend(req, res, { identifier: email, purpose: OTP_PURPOSES.RESET_PASSWORD }))) return;
+
     const user = await prisma.user.findUnique({ where: { email } });
     if (!user) return res.status(404).json({ message: "User not found" });
 
@@ -390,10 +408,17 @@ export const verifyResetOtp = async (req, res) => {
   try {
     let { email, otp, newPassword } = req.body;
 
-    console.log("RAW BODY:", req.body);
+    // The debug logging that used to sit here dumped `req.body` — which on
+    // THIS endpoint is the user's plaintext new password and their one-time
+    // code — straight into the hosting provider's log stream, alongside the
+    // stored otpHash and a freshly computed hash of the submitted code. Log
+    // retention then turns every password reset on the site into a durable,
+    // searchable record of the password that was chosen.
+    //
+    // Nothing below logs a credential. The failure branches are distinguishable
+    // from their responses, which is all a debugger actually needed.
 
     if (!email || !otp || !newPassword) {
-      console.log("FAIL: missing fields");
       return res.status(400).json({ message: "Missing fields" });
     }
 
@@ -402,30 +427,15 @@ export const verifyResetOtp = async (req, res) => {
 
     const user = await prisma.user.findUnique({ where: { email } });
 
-    console.log("DB USER:", {
-      exists: !!user,
-      otpPurpose: user?.otpPurpose,
-      otpExpiresAt: user?.otpExpiresAt,
-      now: new Date(),
-      otpHash: user?.otpHash,
-      incomingOtpHash: hmacProcess(
-        otp,
-        process.env.HMAC_VARIFICATION_CODE_SECRET
-      ),
-    });
-
     if (!user) {
-      console.log("FAIL: user not found");
       return res.status(400).json({ message: "User not found" });
     }
 
     if (user.otpPurpose !== "RESET_PASSWORD") {
-      console.log("FAIL: otpPurpose mismatch", user.otpPurpose);
       return res.status(400).json({ message: "OTP purpose invalid" });
     }
 
     if (!user.otpExpiresAt || user.otpExpiresAt < new Date()) {
-      console.log("FAIL: OTP expired");
       return res.status(400).json({ message: "OTP expired" });
     }
 
@@ -435,7 +445,6 @@ export const verifyResetOtp = async (req, res) => {
     );
 
     if (user.otpHash !== hashedOtp) {
-      console.log("FAIL: OTP mismatch");
       return res.status(400).json({ message: "Invalid OTP" });
     }
 
@@ -449,7 +458,6 @@ export const verifyResetOtp = async (req, res) => {
       },
     });
 
-    console.log("SUCCESS: password reset");
     res.json({ success: true });
   } catch (err) {
     console.error("VERIFY RESET OTP ERROR:", err);
@@ -523,6 +531,14 @@ export const me = async (req, res) => {
           // still checks the role server-side in adminIdentifier.js rather than
           // trusting anything the client says about itself.
           role: true,
+          // The chosen track, returned here as well as on /api/user/me so the
+          // narrowing can be applied on the FIRST render after sign-in. The
+          // profile endpoint is only fetched on the profile page; waiting for
+          // it would mean every other page briefly showed the unfiltered site
+          // and then re-rendered, which is exactly the flash this is meant to
+          // remove.
+          audienceId: true,
+          focusExam: true,
         },
       });
     } catch (dbErr) {
@@ -631,9 +647,13 @@ export const getUserStats = async (req, res) => {
       date: a.createdAt,
       score: a.percent,
       totalQuestions: a.correct + a.wrong + a.unattempted,
-      difficulty: "Actual paper",
+      // PyqAttempt now holds generated mock tests as well as real shifts, so
+      // this reads the row rather than assuming. Labelling a drawn paper
+      // "Actual paper" would misreport it in the one place a candidate goes to
+      // check what they have actually sat.
+      difficulty: a.kind === "generated" ? "Generated mock" : "Actual paper",
       status: "Completed",
-      kind: "pyq",
+      kind: a.kind,
     }));
 
     for (const a of attempts) {

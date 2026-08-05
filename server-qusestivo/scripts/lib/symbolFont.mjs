@@ -14,6 +14,57 @@
 //
 // The mapping below is Adobe's published Symbol encoding, so it is a lookup
 // rather than a guess.
+//
+// SYMBOL IS NOT THE ONLY FONT IN THAT BLOCK
+//
+// A typesetter draws an accent — the arrow of a vector, the hat of a unit
+// vector — as a separate glyph positioned over the letter, from a second
+// symbol-encoded font. Those glyphs land in the SAME private-use block, and
+// the two encodings collide: code 0x72 is Symbol's rho and the accent font's
+// vector arrow, code 0x24 is Symbol's ∃ and the accent font's hat.
+//
+// Decoding by code alone therefore has to be wrong for one of them, and it was
+// wrong for the accents. GATE MT 2026 Q32 — "a⃗ · (b⃗ × c⃗)", with hats on î ĵ k̂ —
+// came out as
+//
+//     ρ ∃ ∃ ∃ a=2i-3j+4k ρ ∃ ∃ ∃ b=i+2j-3k ρ ...
+//
+// and its neighbour Q31 inherited three stray ρ, because an accent-only line
+// sorts above the "Q.32" marker and so still counted as the previous question.
+//
+// Nothing in the character tells the two apart. The geometry does: an accent is
+// drawn ON TOP OF the letter it modifies, whereas a Symbol letter is drawn
+// after the one before it. So the accent codes are listed here and the decision
+// is made in pdfLayout.mjs, which is where the positions live — see
+// `attachAccents`. A glyph that no letter sits under is left to decode as
+// Symbol, which is what a lone ρ (dislocation density, resistivity, the density
+// of air) actually is.
+
+/**
+ * Accent code → the combining mark it draws, for glyphs confirmed in these
+ * papers.
+ *
+ * Deliberately short. An accent that is not listed keeps its Symbol reading,
+ * which is the same failure as before this existed — whereas guessing at codes
+ * nobody has seen would corrupt Greek that is currently correct.
+ */
+export const ACCENT = {
+  0x72: "⃗", // combining right arrow above — a vector
+  0x24: "̂", // combining circumflex — a unit vector's hat
+};
+
+/**
+ * The combining mark this character draws as an accent, or "" if it is not one.
+ *
+ * Answers only "could this be an accent"; whether it IS one is a question about
+ * what sits beneath it, which only the caller can see.
+ */
+export function accentMark(ch) {
+  if (!ch) return "";
+  const cp = ch.codePointAt(0);
+  if (cp < 0xf020 || cp > 0xf0ff) return "";
+  return ACCENT[cp - 0xf000] || "";
+}
 
 /** Symbol character code → Unicode, for the codes these papers actually use. */
 const SYMBOL = {

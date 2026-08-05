@@ -31,7 +31,7 @@ interface Props {
  *   - the visitor is an admin, who is never filtered.
  */
 const FeatureGate: React.FC<Props> = ({ feature, title, children }) => {
-  const { ready, can, audience, setTrack, dismissChoice } = useAudience();
+  const { ready, can, audience, setTrack } = useAudience();
   const [override, setOverride] = useState(false);
 
   if (!ready || can(feature) || override) return <>{children}</>;
@@ -84,13 +84,16 @@ const FeatureGate: React.FC<Props> = ({ feature, title, children }) => {
             <button type="button" onClick={() => setOverride(true)} className="btn btn-primary">
               Use the {title} anyway <ChevronRight className="h-4 w-4" />
             </button>
-            <button
-              type="button"
-              onClick={dismissChoice}
-              className="text-sm font-medium underline muted"
-            >
-              Show me everything from now on
-            </button>
+            {/* "Show me everything from now on" was here, and it permanently
+                cleared the track — a one-click way to undo the narrowing for
+                good, offered on a page the visitor only reached by wandering
+                outside their track in the first place. Using the tool once
+                (the button beside this) still works; switching track for good
+                belongs in the profile, where it is a decision rather than a
+                side effect. */}
+            <Link to="/profile" className="text-sm font-medium underline muted">
+              Change my track
+            </Link>
             <Link to="/exams" className="text-sm font-medium underline muted">
               Back to exams
             </Link>

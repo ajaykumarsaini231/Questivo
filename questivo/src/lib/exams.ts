@@ -29,6 +29,19 @@ export interface Exam {
   name: string;
   /** Exam code passed through to the test generator. */
   code: string;
+  /**
+   * The code the PYQ archive files this exam under — PreviousYearQuestion
+   * .examCode, and what /api/pyq/* returns.
+   *
+   * Separate from `code` above, which carries a year ("NTA_JEE_MAIN_2025",
+   * "NEET_2025") because the generator uses it as a syllabus key. The archive's
+   * codes are year-free, so the two cannot be the same string, and matching
+   * them by fuzzy string comparison is how a JEE candidate ends up being shown
+   * GATE papers. Stated explicitly instead.
+   *
+   * Absent for exams the archive holds nothing for.
+   */
+  pyqExamCode?: string;
   category: string;
   /** Short label for cards and breadcrumbs. */
   shortName: string;
@@ -62,6 +75,7 @@ export const EXAMS: Exam[] = [
     name: "JEE Main",
     shortName: "JEE Main",
     code: "NTA_JEE_MAIN_2025",
+    pyqExamCode: "JEE_MAIN",
     category: "Engineering",
     aliases: ["NTA JEE Main", "JEE Mains", "Joint Entrance Examination Main"],
     summary:
@@ -109,6 +123,7 @@ export const EXAMS: Exam[] = [
     name: "JEE Advanced",
     shortName: "JEE Advanced",
     code: "JEE_ADVANCED",
+    pyqExamCode: "JEE_ADVANCED",
     category: "Engineering",
     aliases: ["IIT JEE", "JEE Advanced exam", "Joint Entrance Examination Advanced"],
     summary:
@@ -148,6 +163,7 @@ export const EXAMS: Exam[] = [
     name: "NEET UG",
     shortName: "NEET UG",
     code: "NEET_2025",
+    pyqExamCode: "NEET",
     category: "Medical",
     aliases: ["NEET", "National Eligibility cum Entrance Test", "NEET Undergraduate"],
     summary:
@@ -187,6 +203,7 @@ export const EXAMS: Exam[] = [
     name: "GATE Metallurgical Engineering (MT)",
     shortName: "GATE MT",
     code: "GATE_MT",
+    pyqExamCode: "GATE_MT",
     category: "Graduate",
     aliases: ["GATE MT", "GATE Metallurgy", "Graduate Aptitude Test in Engineering Metallurgical"],
     summary:

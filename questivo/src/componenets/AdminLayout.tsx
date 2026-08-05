@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { 
-  LayoutDashboard, Users, BookOpen, FileText, 
-  LogOut, UserCog, Menu, X, ChevronRight 
+  LayoutDashboard, Users, BookOpen, FileText, Library,
+  LogOut, UserCog, Menu, X, ChevronRight
 } from 'lucide-react';
 import { Toaster, toast } from 'react-hot-toast';
 import { api } from '../lib/api'; // Your configured Axios instance
@@ -125,6 +125,7 @@ export const AdminLayout: React.FC = () => {
           <div className="px-6 mt-6 mb-2 text-xs font-bold text-slate-400 uppercase tracking-wider">Content</div>
           
           <SidebarItem to="/admin/categories" icon={BookOpen} label="Categories" onClick={closeSidebar} />
+          <SidebarItem to="/admin/pyq" icon={Library} label="Question Bank" onClick={closeSidebar} />
           <SidebarItem to="/admin/sessions" icon={FileText} label="Test Sessions" onClick={closeSidebar} />
         </nav>
 

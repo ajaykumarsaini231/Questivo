@@ -61,6 +61,50 @@ const MIN_HEIGHT_PT = 12;
 const ROW_TOLERANCE = 6;
 /** Breathing room so glyphs are not clipped at the edges. */
 const PAD = 3;
+/**
+ * How far above its own number a question's first line may be looked for.
+ *
+ * The number is centred in its table row, so against an N-line question it
+ * sits about N/2 lines down. Three lines covers every case in this archive and
+ * stops a page-deep block from dragging the crop over the question above.
+ */
+const MAX_LABEL_LIFT_LINES = 3;
+
+/**
+ * What share of a booklet's question numbers must stand in the right half of
+ * the page before it is read as two-up.
+ *
+ * A genuinely two-up booklet puts about half of them there — that is what the
+ * second column IS. A single-column one puts none there, give or take the
+ * numbered steps inside a worked solution that read like question numbers:
+ * across ALLEN's twelve JEE Advanced booklets the right-hand share runs 0% to
+ * 14%. A quarter sits well clear of both.
+ */
+const TWO_UP_MIN_RIGHT = 0.25;
+
+/**
+ * Is this file actually set two-up?
+ *
+ * `mode` says which publisher a file came from, and that used to be taken as
+ * saying how it is laid out. It does not: ALLEN's JEE Advanced booklets are
+ * single-column A4, and cropping them at the page midline cut every question
+ * off mid-sentence at 262pt — "Consider the function f : (−π/2, π/2) → (−∞,∞)
+ * de" and no further.
+ *
+ * Judged on the question numbers rather than on the text, because a column
+ * boundary is invisible in prose that happens to be narrow: a page of short
+ * algebra steps looks two-up by any measure of line width, while where the
+ * NUMBERS stand says where the columns start and nothing else does.
+ *
+ * Falls back to two-up when there is too little to go on. That keeps the older
+ * behaviour on a file this cannot read, and errs toward a crop that is too
+ * narrow over one carrying a neighbouring column's worked solution.
+ */
+function pagesAreTwoUp(anchors) {
+  if (anchors.length < 4) return true;
+  const right = anchors.filter((a) => a.x >= a.pageW / 2).length;
+  return right / anchors.length >= TWO_UP_MIN_RIGHT;
+}
 
 /** "(1)" / "(2)" ... or "(A)" / "(B)" ... at the start of a line or after space. */
 const OPTION_MARK = /(?:^|\s)\(\s*([1-4A-D])\s*\)/g;
@@ -111,6 +155,8 @@ function structureOf(doc, pattern) {
   const instructions = [];
   /** page → y of its running footer, where the page prints one. */
   const footers = new Map();
+  /** Every text block's box, for locating the cell a question number labels. */
+  const blocks = [];
   /** Page and y of the first "SECTION-A" heading, if the file has one. */
   let paperStart = null;
 
@@ -121,10 +167,25 @@ function structureOf(doc, pattern) {
     const [, , pageW, pageH] = page.getBounds();
 
     for (const block of st.blocks || []) {
+      // Kept whole, not just as lines. A question number and the question
+      // beside it are two blocks, and only the block bbox says how far the
+      // one beside it reaches UP — see the lift in extractFigures.
+      const bb = block.bbox || {};
+      let blockIndex = -1;
+      if (bb.w) {
+        blockIndex = blocks.length;
+        blocks.push({ page: p, index: blockIndex, x: bb.x ?? 0, y: bb.y ?? 0, w: bb.w, h: bb.h ?? 0 });
+      }
+
       for (const line of block.lines || []) {
         const text = (line.text ?? "").trim();
         const b = line.bbox || {};
-        const at = { page: p, x: b.x ?? 0, y: b.y ?? 0, w: b.w ?? 0, h: b.h ?? 0, pageW, pageH };
+        const at = {
+          page: p, x: b.x ?? 0, y: b.y ?? 0, w: b.w ?? 0, h: b.h ?? 0, pageW, pageH,
+          // Which block this line came from, so the lift can tell the cell
+          // BESIDE a question number from the one it is written in.
+          blockIndex,
+        };
 
         // A booklet prints "Official Ans. by NTA (2)" and then its worked
         // solution beneath the question. Cropping past it would hand the
@@ -153,7 +214,13 @@ function structureOf(doc, pattern) {
         }
 
         if (/^Sol\b\.?/i.test(text)) { solutions.push(at); stops.push(at); continue; }
-        if (/^(Official\s*Ans|Allen\s*Ans)/i.test(text)) { stops.push(at); continue; }
+        // "Ans." on its own is an answer line too, and until it was listed
+        // here the question crop ran straight through it: JEE Advanced 2026
+        // Paper 1 Q10 was published to candidates with "Ans. 5.00" printed
+        // under the question it answers. Bare `Ans` and not `Ans.`, because
+        // the booklets space it both ways — and \b keeps it off "Answer the
+        // following", which is a question's own words.
+        if (/^(Official\s*Ans|Allen\s*Ans|Ans\b)/i.test(text)) { stops.push(at); continue; }
 
         const q = NOT_A_QUESTION.test(text) ? null : pattern.exec(text);
         // A worked solution is full of lines that begin like a question number
@@ -182,7 +249,9 @@ function structureOf(doc, pattern) {
   const afterStart = (a) =>
     !paperStart || a.page > paperStart.page || (a.page === paperStart.page && a.y >= paperStart.y);
 
-  return { questions: questions.filter(afterStart), options, stops, solutions, instructions, footers };
+  return {
+    questions: questions.filter(afterStart), options, stops, solutions, instructions, footers, blocks,
+  };
 }
 
 /**
@@ -535,7 +604,7 @@ export function extractFigures({ pdfPath, outDir, wanted, mode }) {
   // off the page. The two-up coaching booklets genuinely vary and keep the
   // detection.
   const forcedLabels = mode === "gate" ? ["A", "B", "C", "D"] : null;
-  const { questions: anchors, options: optionMarks, stops, solutions, instructions, footers } =
+  const { questions: anchors, options: optionMarks, stops, solutions, instructions, footers, blocks } =
     structureOf(doc, pattern);
 
   /** How far down a page a crop may go: above its footer, else the old inset. */
@@ -563,6 +632,11 @@ export function extractFigures({ pdfPath, outDir, wanted, mode }) {
   // a near-complete run of 30 — and questions are addressed from it.
   const anchorBase = contiguousBase([...byNumber.keys()], SUBJECT_SPAN);
 
+  // Decided once for the file, from every question number in it. Per page it
+  // would read a page whose second column happens to start below the fold as
+  // single-column and crop the next one twice as wide.
+  const twoUpBooklet = pagesAreTwoUp(anchors);
+
   /** Where question `w` sits in this file, under whichever numbering it uses. */
   const locate = (w) => {
     if (anchorBase !== null && w.subjectNumber) {
@@ -582,9 +656,10 @@ export function extractFigures({ pdfPath, outDir, wanted, mode }) {
     if (!a) { missing.push(w.baseName); continue; }
 
     const page = doc.loadPage(a.page);
-    // Only the ALLEN booklets are set two-up, with the worked solution printed
-    // beside the question. MathonGo and GATE both run one column down the page.
-    const twoUp = mode === "allen";
+    // Only some ALLEN booklets are set two-up. MathonGo and GATE both run one
+    // column down the page, and so — measured, not assumed — do ALLEN's JEE
+    // Advanced booklets. See `pagesAreTwoUp`.
+    const twoUp = mode === "allen" && twoUpBooklet;
     const mid = a.pageW / 2;
     // ALLEN booklets are set two-up, so a crop spanning the page would carry
     // half of the worked solution printed beside the question.
@@ -605,7 +680,64 @@ export function extractFigures({ pdfPath, outDir, wanted, mode }) {
     // answer line, whichever comes first.
     const ends = [nextQ?.y, nextStop?.y].filter((v) => typeof v === "number");
     const bandBottom = ends.length ? Math.min(...ends) - 2 : contentBottom(a.page, a.pageH);
-    const bandTop = Math.max(0, a.y - PAD);
+
+    /**
+     * Where the question actually starts, which is not always its number.
+     *
+     * These papers are tables: the number sits in a narrow left cell and the
+     * question in a wide one beside it, and the number is centred in its row.
+     * Centred against two lines of question it is typeset BELOW the first of
+     * them — GATE MT 2026 puts "Q.18" at y=118 and "Which one of the following
+     * dislocation dissociation reactions is feasible in" at y=107. Cropping
+     * from the number cut that line through the middle of its letters and the
+     * candidate was asked "face-centered cubic metals?".
+     *
+     * So the top comes from the cell, not the label: a text block that STARTS
+     * above the number and still reaches down to its line — which is what a
+     * wrapped question beside a centred number looks like, and what nothing
+     * else on the page does.
+     *
+     * Deliberately not "the block to the RIGHT of the number". That is how it
+     * reads on the page and it is not what the boxes say: 2026 Q18's body
+     * block begins at x=108 against a number at x=69, but Q57's begins at
+     * x=64, a few points to its LEFT, and testing for it left Q57 asking
+     * "form a spherical solid nucleus". The columns still bound the search, so
+     * a two-up booklet cannot reach the solution printed beside the question.
+     *
+     * Reaching the label is not sufficient on its own either — some blocks run
+     * the depth of the page. Two bounds hold it: the reach is capped at a few
+     * lines, which is as far as centring a number in its own cell can push it,
+     * and no other question's number may fall inside the lift, so it can never
+     * cross into the question above. Within those it only moves the crop UP.
+     */
+    const liftFloor = Math.max(0, a.y - a.h * MAX_LABEL_LIFT_LINES);
+    const bodyTop = blocks.reduce((top, b) => {
+      // The block the number is WRITTEN in gets a shorter leash than the cell
+      // beside it, and is identified by identity rather than by geometry: the
+      // two boxes overlap in the case this exists for, because a number
+      // centred in its row sits inside the span of the text beside it, so
+      // "does this box contain the number" would reject GATE Q57 — the case it
+      // was built for.
+      //
+      // Its own block may only give back the sliver of box that sits above its
+      // first line, which is a couple of points of leading and is what five
+      // GATE stems need to stop grazing their ascenders. Anything as deep as a
+      // line is another LINE, and mupdf does merge those across a question
+      // boundary: in ALLEN's 2025 Chemistry booklet it put the tail of
+      // question 5's solution in the same block as question 6's number, and
+      // taking that printed "So, Bond length of Li2 > B2" above the question.
+      if (b.index === a.blockIndex) {
+        return a.y - b.y < a.h ? Math.min(top, b.y) : top;
+      }
+      if (b.page !== a.page || b.y >= a.y || b.y < liftFloor) return top;
+      if (b.x < colX0 || b.x >= colX1) return top;
+      // Must still be under way at the number's own line, or it is a different
+      // row of the table rather than this one.
+      if (b.y + b.h <= a.y) return top;
+      if (anchors.some((q) => q !== a && q.page === a.page && q.y >= b.y && q.y < a.y)) return top;
+      return Math.min(top, b.y);
+    }, a.y);
+    const bandTop = Math.max(0, bodyTop - PAD);
     if (bandBottom - bandTop < MIN_HEIGHT_PT) { missing.push(w.baseName); continue; }
 
     const mine = { };

@@ -22,6 +22,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import SafeMathRenderer from "../componenets/SafeMathRenderer";
+import PyqFigure from "../componenets/PyqFigure";
 import PyqResultView, { Stat } from "../componenets/PyqResultView";
 import PremiumDialog from "../componenets/PremiumDialog";
 import { useExamLock } from "../lib/useExamLock";
@@ -33,6 +34,9 @@ import {
   scorePyqPaper,
   scorePracticePaper,
   paletteState,
+  renderMode,
+  cropOf,
+  PLAYER_SHELL_WIDTH,
   PALETTE_STYLE,
   PALETTE_LABEL,
   type PaletteState,
@@ -45,6 +49,36 @@ type Responses = Record<string, string>;
 type Flags = Record<string, boolean>;
 
 const SUBJECT_ORDER = ["Physics", "Chemistry", "Mathematics", "Biology"];
+
+/**
+ * The subjects this paper is actually made of, in the order to show them.
+ *
+ * Read off the questions rather than filtered out of SUBJECT_ORDER, because
+ * that list is the JEE and NEET subjects and nothing else. GATE Metallurgical
+ * Engineering is "General Aptitude" and "Metallurgical Engineering", which
+ * matched no entry, so the filter returned nothing — and both the subject tabs
+ * and the question palette are built by mapping over it. A 65-question paper
+ * therefore opened with no palette at all: the candidate could go forwards and
+ * backwards one question at a time and had no way to see, or reach, the rest.
+ *
+ * SUBJECT_ORDER still decides the order of the subjects it names, so a JEE
+ * paper reads Physics, Chemistry, Mathematics however its rows are stored.
+ * Anything it does not name follows, in the order the paper introduces it —
+ * which for GATE is General Aptitude (Q1–10), then the subject paper. Deriving
+ * it this way also means no question can be dropped from the palette by having
+ * a subject nobody listed.
+ */
+function paperSubjects(questions: PyqPaperQuestion[]): string[] {
+  const seen: string[] = [];
+  for (const q of questions) {
+    if (q.subject && !seen.includes(q.subject)) seen.push(q.subject);
+  }
+  const rank = (s: string) => {
+    const known = SUBJECT_ORDER.indexOf(s);
+    return known === -1 ? SUBJECT_ORDER.length + seen.indexOf(s) : known;
+  };
+  return [...seen].sort((a, b) => rank(a) - rank(b));
+}
 
 /**
  * True when the stem is only the converter's citation line AND the figure it
@@ -149,9 +183,13 @@ export default function PyqPaperRunner() {
   /** GATE's MSQ: several correct options, stored as a sorted "A,C" string. */
   const multiSelect = current?.questionType === "mcq_multiple";
   const chosen = multiSelect ? draft.split(",").filter(Boolean) : [];
+  /** Which form this question is drawn in — the crop, or the transcription. */
+  const mode = current ? renderMode(current) : "text";
   /** Is the question itself on screen as a picture? Decides what an option
    *  with no text and no crop of its own can honestly say. */
-  const hasPicture = Boolean(current?.questionImage || current?.diagramImage);
+  const hasPicture = Boolean(
+    (mode === "image" && current?.questionImage) || current?.diagramImage
+  );
 
   /* -------------------------------- clock -------------------------------- */
 
@@ -368,6 +406,7 @@ export default function PyqPaperRunner() {
   const answeredCount = Object.keys(responses).length;
   const markedCount = Object.values(marked).filter(Boolean).length;
   const notAnswered = Object.keys(visited).filter((id) => !responses[id]).length;
+  const subjects = paperSubjects(questions);
 
   return (
     <div className="min-h-screen bg-slate-100">
@@ -384,11 +423,16 @@ export default function PyqPaperRunner() {
         />
       )}
 
-      <div className="mx-auto flex max-w-[1400px] flex-col gap-4 p-4 lg:flex-row">
+      {/* The width the admin's "as the candidate sees it" frame is measured
+          from, so the two cannot drift apart. */}
+      <div
+        className="mx-auto flex flex-col gap-4 p-4 lg:flex-row"
+        style={{ maxWidth: PLAYER_SHELL_WIDTH }}
+      >
         {/* ─────────────── question pane ─────────────── */}
         <main className="flex-1 rounded-lg bg-white shadow-sm">
           <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 px-5 py-3">
-            {SUBJECT_ORDER.filter((s) => questions.some((q) => q.subject === s)).map((s) => {
+            {subjects.map((s) => {
               const first = questions.findIndex((q) => q.subject === s);
               const active = current?.subject === s;
               return (
@@ -427,16 +471,17 @@ export default function PyqPaperRunner() {
                 authoritative rendering — the extracted text is a transcription
                 of it — so it leads, and the text follows only when there is no
                 image or the text adds something the crop does not. */}
-            {current?.questionImage && (
-              <img
+            {current && renderMode(current) === "image" && current.questionImage && (
+              <PyqFigure
                 src={current.questionImage}
+                crop={cropOf(current, "questionImage")}
                 alt={`Question ${current.paperQuestionNumber} as printed`}
                 loading="lazy"
                 className="mb-4 max-w-full rounded border border-slate-200"
               />
             )}
 
-            {!current?.questionImage && !isPlaceholderStem(current) && (
+            {current && renderMode(current) === "text" && !isPlaceholderStem(current) && (
               <div className="prose prose-slate max-w-none text-[15px] leading-relaxed text-slate-800">
                 <SafeMathRenderer text={current?.questionText ?? ""} />
               </div>
@@ -446,14 +491,14 @@ export default function PyqPaperRunner() {
                 per-part crops. Suppressed when questionImage exists, because
                 the linker points both at the same file and the stem would
                 render twice. */}
-            {current?.diagramImage && !current?.questionImage && (
+            {current?.diagramImage && mode === "text" && (
               <img
                 src={current.diagramImage}
                 alt=""
                 className="mt-4 max-h-96 rounded border border-slate-200"
               />
             )}
-            {!current?.diagramImage && !current?.questionImage && current?.diagramSvg && (
+            {!current?.diagramImage && mode === "text" && current?.diagramSvg && (
               <div
                 className="mt-4 overflow-x-auto"
                 // Sanitized server-side by lib/sanitizeSvg.js before storage.
@@ -477,7 +522,13 @@ export default function PyqPaperRunner() {
                 )}
                 {(["A", "B", "C", "D"] as const).map((letter) => {
                   const text = (current as any)[`option${letter}`] as string | null;
-                  const image = (current as any)[`option${letter}Image`] as string | null;
+                  const crop = (current as any)[`option${letter}Image`] as string | null;
+                  // The question's setting governs its options too — a stem
+                  // drawn from a scan beside options drawn from text is two
+                  // typefaces in one question. It can only be honoured where
+                  // the chosen form exists, so an option with a crop and no
+                  // text still shows its crop.
+                  const image = mode === "text" && text?.trim() ? null : crop;
                   const selected = multiSelect ? chosen.includes(letter) : draft === letter;
                   return (
                     <label
@@ -521,8 +572,9 @@ export default function PyqPaperRunner() {
                             rather than "not readable", which told the candidate
                             the choice was lost when it was on screen already. */}
                         {image ? (
-                          <img
+                          <PyqFigure
                             src={image}
+                            crop={cropOf(current, `option${letter}Image`)}
                             alt={`Option ${letter}`}
                             loading="lazy"
                             className="max-w-full"
@@ -621,6 +673,19 @@ export default function PyqPaperRunner() {
 
         {/* ─────────────── palette ─────────────── */}
         <aside className="w-full shrink-0 rounded-lg bg-white p-4 shadow-sm lg:w-[340px]">
+          {/* How long the paper is, said plainly. The legend below counts the
+              five states but never the paper, so "63 not visited" was the only
+              clue to its size — and that is a number the candidate has to do
+              arithmetic on to learn what they are actually sitting. */}
+          <div className="mb-3 flex items-baseline justify-between">
+            <h2 className="text-sm font-bold uppercase tracking-wide text-slate-700">
+              Question Palette
+            </h2>
+            <span className="text-xs font-medium text-slate-500">
+              {questions.length} question{questions.length === 1 ? "" : "s"}
+            </span>
+          </div>
+
           <div className="grid grid-cols-2 gap-x-3 gap-y-2 border border-dashed border-slate-300 p-3 text-xs">
             <Legend n={questions.length - Object.keys(visited).length} state="notVisited" />
             <Legend n={notAnswered} state="notAnswered" />
@@ -629,9 +694,14 @@ export default function PyqPaperRunner() {
           </div>
 
           <div className="mt-4 max-h-[52vh] overflow-y-auto pr-1">
-            {SUBJECT_ORDER.filter((s) => questions.some((q) => q.subject === s)).map((s) => (
+            {subjects.map((s) => (
               <div key={s} className="mb-4">
-                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">{s}</p>
+                <p className="mb-2 flex items-baseline justify-between text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  <span>{s}</span>
+                  <span className="font-medium normal-case tracking-normal text-slate-400">
+                    {questions.filter((q) => q.subject === s).length}
+                  </span>
+                </p>
                 <div className="grid grid-cols-8 gap-1.5">
                   {questions.map((q, i) =>
                     q.subject !== s ? null : (

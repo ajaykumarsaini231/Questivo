@@ -156,6 +156,24 @@ export const ROUTES: RouteSeo[] = [
     facts: [],
     noindex: true,
   },
+  {
+    // The archive, plus everything under it: /pyq/:paperId runs a paper and
+    // /pyq/attempt/:id reopens a sitting. Without an entry here every one of
+    // those pages fell through to the unknown-path branch in Seo.tsx and put
+    // "Page not found" in the tab of a page that had loaded perfectly.
+    //
+    // noindex, so the prerender step renders head only and the sitemap is
+    // unchanged. Promoting the archive to an indexable page is a separate
+    // decision from making its tab say the right thing.
+    path: "/pyq",
+    title: "Previous Year Papers – Sit the Real JEE Main Paper | Questivo",
+    description:
+      "Sit real previous year papers exactly as they were set, under the original clock and marking scheme, and review every question afterwards.",
+    keywords: "previous year papers, JEE Main PYQ, past paper mock test",
+    heading: "Previous year papers",
+    facts: [],
+    noindex: true,
+  },
 ];
 
 /**
@@ -201,7 +219,16 @@ export const ALL_ROUTES: RouteSeo[] = [...ROUTES, ...EXAM_ROUTES];
 export const INDEXABLE_ROUTES = ALL_ROUTES.filter((r) => !r.noindex);
 
 export function getRouteSeo(pathname: string): RouteSeo {
-  return ALL_ROUTES.find((r) => r.path === pathname) ?? ROUTES[0];
+  return (
+    ALL_ROUTES.find((r) => r.path === pathname) ??
+    // A dynamic child inherits its section's entry, longest prefix first:
+    // /pyq/attempt/<id> is a previous-year page, not the homepage. "/" is
+    // excluded because it prefixes everything and would match first.
+    ALL_ROUTES.filter((r) => r.path !== "/" && pathname.startsWith(`${r.path}/`)).sort(
+      (a, b) => b.path.length - a.path.length
+    )[0] ??
+    ROUTES[0]
+  );
 }
 
 /* ============================ STRUCTURED DATA ============================ */

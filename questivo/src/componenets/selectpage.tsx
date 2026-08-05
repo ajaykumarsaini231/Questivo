@@ -20,6 +20,7 @@ import {
   X       // Added Close Icon
 } from "lucide-react";
 import CourseRequestModal from "./CourseRequestModal";
+import PremiumDialog from "./PremiumDialog";
 import { useAudience } from "./AudienceProvider";
 
 // --- TYPES ---
@@ -146,6 +147,8 @@ export default function GenerateTestPage() {
   const [examTypeText, setExamTypeText] = useState<string>("");
   
   const [showCourseRequest, setShowCourseRequest] = useState(false);
+  /** Set when the API refuses with 402 — see the submit handler. */
+  const [premiumReason, setPremiumReason] = useState<string | null>(null);
 
   /**
    * Track filtering for the exam dropdown.
@@ -156,11 +159,14 @@ export default function GenerateTestPage() {
    * to see everything, because the full catalogue is the point of this page for
    * anyone who came here to explore.
    */
-  const { audience, visibleExams } = useAudience();
+  const { audience, visibleExams, lockedToTrack } = useAudience();
   const [showAllCategories, setShowAllCategories] = useState(false);
 
   const listedCategories = useMemo(() => {
-    if (!audience || showAllCategories) return categories;
+    // `showAllCategories` cannot widen the list for a locked candidate: the
+    // toggle that sets it is hidden from them, and honouring a stale `true`
+    // here would reopen the whole catalogue after a track change.
+    if (!audience || (showAllCategories && !lockedToTrack)) return categories;
     const matched = visibleExams
       .map((e) => matchCategory(categories, e.code))
       .filter((c): c is ExamCategory => Boolean(c));
@@ -168,13 +174,15 @@ export default function GenerateTestPage() {
     // category table would otherwise leave the visitor with no way to choose
     // anything at all.
     if (!matched.length) return categories;
-    // An explicit request for an off-track exam beats the track. Clicking
-    // "generate an SSC paper" is a stronger, more recent signal than a track
-    // chosen once on a previous visit, and honouring the track here would
-    // silently swap the exam out from under them.
-    if (requestedExam && !matchCategory(matched, requestedExam)) return categories;
+    // An explicit request for an off-track exam beats the track — but only for
+    // a visitor who is not locked to one. Clicking "generate an SSC paper" is a
+    // stronger, more recent signal than a track chosen on a previous visit, so
+    // an undecided visitor gets the whole catalogue rather than having the exam
+    // swapped out from under them. For a locked candidate the same line was a
+    // hole: any ?exam= in the URL reopened all 61 exams.
+    if (!lockedToTrack && requestedExam && !matchCategory(matched, requestedExam)) return categories;
     return matched;
-  }, [categories, audience, showAllCategories, visibleExams, requestedExam]);
+  }, [categories, audience, showAllCategories, lockedToTrack, visibleExams, requestedExam]);
 
   /**
    * Keep the selection inside the list that is actually on screen.
@@ -370,6 +378,22 @@ export default function GenerateTestPage() {
       };
 
       if (!res.ok || !json.success) {
+        /**
+         * 402 — the operator turned AI generation off.
+         *
+         * PremiumRoute normally stops anyone reaching this form at all, but it
+         * reads the switch once on page load. A tab left open across a restart,
+         * or a switch flipped while someone was choosing topics, lands here
+         * instead. Showing the upgrade dialog is the same answer the route
+         * would have given, rather than a raw "Payment Required" in a toast.
+         */
+        if (res.status === 402) {
+          setPremiumReason(
+            (json as any)?.reason ||
+              "AI paper generation is not available on the free plan right now."
+          );
+          return;
+        }
         // Retained for deploy skew only: the frontend and the API ship
         // separately, so a browser on the new build can still meet an old
         // server that rejects an empty PYQ shelf instead of falling back.
@@ -475,7 +499,11 @@ export default function GenerateTestPage() {
                       <svg className="h-4 w-4 fill-current" viewBox="0 0 20 20"><path d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"/></svg>
                     </div>
                   </div>
-                  {audience && categories.length > listedCategories.length && (
+                  {/* Both toggles are hidden from a candidate locked to a
+                      track — the dropdown is then exactly their exams, and
+                      the way to change that is the profile. Admins and
+                      undecided visitors keep the switch. */}
+                  {!lockedToTrack && audience && categories.length > listedCategories.length && (
                     <button
                       type="button"
                       onClick={() => setShowAllCategories(true)}
@@ -484,7 +512,7 @@ export default function GenerateTestPage() {
                       Show all {categories.length} exams
                     </button>
                   )}
-                  {audience && showAllCategories && (
+                  {!lockedToTrack && audience && showAllCategories && (
                     <button
                       type="button"
                       onClick={() => setShowAllCategories(false)}
@@ -782,6 +810,14 @@ export default function GenerateTestPage() {
           <CourseRequestModal
             open={showCourseRequest}
             onClose={() => setShowCourseRequest(false)}
+          />
+
+          {/* Shown only if the switch moved under a session that was already
+              on this page — the route guard catches every other case. */}
+          <PremiumDialog
+            open={premiumReason !== null}
+            onClose={() => setPremiumReason(null)}
+            feature="AI paper generation"
           />
         </div>
       </motion.div>

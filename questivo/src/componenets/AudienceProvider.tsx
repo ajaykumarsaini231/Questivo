@@ -44,9 +44,22 @@ interface AudienceValue {
   seeingEverything: boolean;
   /** Is this feature part of the visitor's track? */
   can: (feature: FeatureId) => boolean;
+  /**
+   * True once a track is in force and the viewer is not an admin.
+   *
+   * This is the difference between narrowing as a DEFAULT and narrowing as a
+   * RULE, and the product decision changed: a candidate who has told us they
+   * are preparing for NEET should not be shown SSC and GATE papers, and the
+   * "show all exams" links meant they were, one click from every listing. The
+   * escape hatches are hidden while this is true; the way to change track is
+   * the profile, which is deliberate rather than accidental.
+   *
+   * Admins are never locked — an operator has to be able to see the catalogue.
+   */
+  lockedToTrack: boolean;
   /** Exams to show in listings, narrowed to the track (and focus exam). */
   visibleExams: Exam[];
-  /** Every exam, ignoring the track. For "show all" escape hatches. */
+  /** Every exam, ignoring the track. Only render behind `!lockedToTrack`. */
   allExams: Exam[];
   options: Audience[];
   setTrack: (id: AudienceId, focusExam?: string | null) => void;
@@ -92,19 +105,62 @@ export const AudienceProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setStorageRead(true);
   }, []);
 
+  /**
+   * Write the track to the signed-in account.
+   *
+   * Fire-and-forget: the local state has already changed and the browser copy
+   * is already written, so a failed sync costs this device nothing today — it
+   * only means the next device has to be told again. Blocking the UI on it, or
+   * rolling the choice back when it fails, would be worse on both counts.
+   */
+  const syncToAccount = useCallback((audience: AudienceId | null, focus: string | null) => {
+    fetch(`${API_BASE}/api/user/profile`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ audienceId: audience, focusExam: focus }),
+    }).catch(() => {
+      /* offline or signed out; the browser copy still holds */
+    });
+  }, []);
+
   useEffect(() => {
     const ac = new AbortController();
     fetch(`${API_BASE}/api/auth/me`, { credentials: "include", signal: ac.signal })
       .then((r) => (r.ok ? r.json() : null))
       .then((body) => {
-        const role = body?.user?.role;
+        const user = body?.user;
+        const role = user?.role;
         setIsAdmin(role === "admin" || role === "superadmin");
+        if (!user) return;
+
+        // THE ACCOUNT WINS.
+        //
+        // The track is a property of the candidate, not of the machine they
+        // happen to be sitting at. A device that has never been told anything —
+        // a new phone, a college lab browser, a fresh profile after clearing
+        // site data — must still show a NEET aspirant only NEET, and that can
+        // only come from the server. So whatever this browser remembered is
+        // overwritten by whatever the account says.
+        if (user.audienceId && getAudience(user.audienceId)) {
+          setAudienceId(user.audienceId);
+          setFocusExamSlug(user.focusExam ?? null);
+          setDismissed(false);
+          writeTrack({ audience: user.audienceId, focusExam: user.focusExam ?? null });
+          return;
+        }
+
+        // Signed in, but the account has never recorded a track. Everyone who
+        // chose one before it was stored server-side is in this state, so the
+        // browser's answer is promoted rather than thrown away and re-asked.
+        const local = readTrack();
+        if (local?.audience) syncToAccount(local.audience, local.focusExam ?? null);
       })
       // A logged-out visitor 401s here, which is the normal case, not an error.
       .catch(() => setIsAdmin(false))
       .finally(() => setAuthChecked(true));
     return () => ac.abort();
-  }, []);
+  }, [syncToAccount]);
 
   const persist = useCallback(
     (next: { audience: AudienceId | null; focusExam: string | null; dismissed?: boolean }) => {
@@ -128,8 +184,11 @@ export const AudienceProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       // back. Nothing is lost — the chip in the header switches it on again.
       setAdminSeesEverything(false);
       persist({ audience: id, focusExam, dismissed: false });
+      // Both stores, always. The browser copy is what the next render reads;
+      // the account copy is what the next DEVICE reads.
+      syncToAccount(id, focusExam);
     },
-    [persist]
+    [persist, syncToAccount]
   );
 
   const dismissChoice = useCallback(() => {
@@ -165,10 +224,20 @@ export const AudienceProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const visibleExams = useMemo(() => {
     const inTrack = examsForAudience(effectiveAudience);
     if (!focusExam || effectiveAudience === null) return inTrack;
-    // A focus exam leads the list rather than replacing it: the rest of the
-    // track stays one click away, which is the difference between focusing a
-    // site and locking someone out of it.
-    return [focusExam, ...inTrack.filter((e) => e.slug !== focusExam.slug)];
+    /**
+     * A focus exam REPLACES the track's list, it does not merely lead it.
+     *
+     * It used to lead: focus exam first, then the rest of the track. The
+     * reasoning was that nothing should be locked away. But the candidate who
+     * bothers to name one exam has said something quite specific — "I am
+     * preparing for NEET" — and answering it with NEET, JEE Main and JEE
+     * Advanced ignores them. The whole point of picking is to stop seeing the
+     * other two.
+     *
+     * Nothing is unreachable: clearing the focus exam in the profile brings the
+     * whole track back, which is the deliberate act it should be.
+     */
+    return [focusExam];
   }, [effectiveAudience, focusExam]);
 
   /**
@@ -198,6 +267,7 @@ export const AudienceProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       forceChoice || (storageRead && authChecked && !audienceId && !dismissed && !isAdmin),
     isAdmin,
     seeingEverything: effectiveAudience === null,
+    lockedToTrack: Boolean(effectiveAudience) && !isAdmin,
     can,
     visibleExams,
     allExams: EXAMS,
@@ -226,6 +296,7 @@ export function useAudience(): AudienceValue {
     needsChoice: false,
     isAdmin: false,
     seeingEverything: true,
+    lockedToTrack: false,
     can: () => true,
     visibleExams: EXAMS,
     allExams: EXAMS,

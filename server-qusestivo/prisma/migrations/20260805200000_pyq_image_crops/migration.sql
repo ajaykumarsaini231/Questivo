@@ -1,0 +1,15 @@
+-- Crop windows for the per-part figures, applied when they are drawn.
+--
+-- Keyed by the image column each one narrows, with insets in percent:
+--   {"optionDImage": {"top": 0, "right": 0, "bottom": 62.4, "left": 0}}
+--
+-- The crops themselves are files in the pyq-figures repo served over jsDelivr,
+-- so re-cutting one is a commit and a cache wait rather than a save. The defect
+-- this fixes does not need a new file: the last option's rectangle runs to the
+-- bottom of the question band and the page footer in that band is real ink, so
+-- the whitespace trim keeps it and the choice is followed by a screenful of
+-- blank. Every pixel wanted is already in the file — a window says which.
+--
+-- Nullable with no default and no backfill: an existing row has no window and
+-- is drawn exactly as it is today.
+ALTER TABLE "PreviousYearQuestion" ADD COLUMN "imageCrops" JSONB;

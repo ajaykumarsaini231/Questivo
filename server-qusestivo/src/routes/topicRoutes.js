@@ -6,22 +6,32 @@ import {
   updateTopic,
   deactivateTopic,
 } from "../controllers/topicController.js";
+import { adminIdentifier } from "../middleware/adminIdentifier.js";
 
 const router = Router();
 
-// GET /api/topics?examCode=...&examId=...
+/**
+ * Reading the syllabus is public — the generate-test form fetches it before
+ * anyone has signed in, and the exam landing pages are indexed.
+ *
+ * WRITING IT WAS ALSO PUBLIC, AND SHOULD NEVER HAVE BEEN.
+ *
+ * The three write routes below carried no middleware at all. Mounted at
+ * /api/cate_topics in server.js, that made
+ * `POST /api/cate_topics/exam-categories/<id>/topics` and
+ * `PUT /api/cate_topics/topics/<id>` writable by anyone on the internet with
+ * curl — no account, no cookie, no token. Combined with topicController's
+ * `data: req.body` update, any visitor could rewrite any row of the syllabus
+ * every exam in the catalogue is generated from.
+ *
+ * categoryRoutes.js right next door already guards its equivalents with
+ * adminIdentifier; this file was simply missed.
+ */
 router.get("/topics", getAllTopics);
-
-// GET /api/exam-categories/:codeOrId/topics
 router.get("/exam-categories/:codeOrId/topics", getTopicsForExam);
 
-// POST /api/exam-categories/:examId/topics
-router.post("/exam-categories/:examId/topics", createTopicForExam);
-
-// PUT /api/topics/:id
-router.put("/topics/:id", updateTopic);
-
-// PATCH /api/topics/:id/deactivate
-router.patch("/topics/:id/deactivate", deactivateTopic);
+router.post("/exam-categories/:examId/topics", adminIdentifier, createTopicForExam);
+router.put("/topics/:id", adminIdentifier, updateTopic);
+router.patch("/topics/:id/deactivate", adminIdentifier, deactivateTopic);
 
 export default router;

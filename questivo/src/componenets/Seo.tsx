@@ -67,7 +67,7 @@ export default function Seo() {
 
     // An unknown path renders NotFoundPage, so the tab and any shared preview
     // should say so rather than inheriting the homepage's title.
-    const isDynamic = /^\/(tests|interviews|admin)\//.test(pathname);
+    const isDynamic = /^\/(tests|interviews|admin|pyq)\//.test(pathname);
     const title = isKnown || isDynamic ? route.title : "Page not found | Questivo";
     const description =
       isKnown || isDynamic

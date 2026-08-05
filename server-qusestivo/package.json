@@ -9,7 +9,8 @@
     "build": "npx prisma generate",
     "postinstall": "prisma generate",
     "import:pyq": "node scripts/importPyq.mjs",
-    "test": "node src/test/aiFailover.test.mjs && node src/test/svgAndPattern.test.mjs && node src/test/sectionPlan.test.mjs && node src/test/pyq.test.mjs"
+    "test": "node src/test/aiFailover.test.mjs && node src/test/svgAndPattern.test.mjs && node src/test/sectionPlan.test.mjs && node src/test/pyq.test.mjs",
+    "test:db": "node src/test/otpThrottle.test.mjs"
   },
   "dependencies": {
     "@google-cloud/text-to-speech": "^6.4.1",

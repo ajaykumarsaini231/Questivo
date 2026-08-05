@@ -56,8 +56,13 @@ export const getUserDetails = async (req, res) => {
         return res.status(404).json({ success: false, error: "User not found" });
     }
 
-    // Remove password hash before sending
-    const { passwordHash, ...safeUser } = user;
+    // Strip every credential, not just the password.
+    //
+    // Dropping passwordHash alone still shipped otpHash, otpExpiresAt and
+    // otpPurpose — which together are a live second factor. Anyone holding that
+    // response can tell whether a login code is currently outstanding on the
+    // account and, with the HMAC secret, verify guesses against it offline.
+    const { passwordHash, otpHash, otpExpiresAt, otpPurpose, ...safeUser } = user;
     res.json({ success: true, data: safeUser });
   } catch (error) {
     console.error("Get User Details Error:", error);
@@ -139,14 +144,73 @@ export const getAllUsers = async (req, res) => {
   }
 };
 
+/**
+ * Copy only the named keys across, dropping everything else on the floor.
+ *
+ * `undefined` is skipped rather than written, so a partial edit form patches
+ * the fields it sent instead of nulling every field it left out.
+ */
+const pick = (body, fields) => {
+  const out = {};
+  for (const field of fields) {
+    if (body?.[field] !== undefined) out[field] = body[field];
+  }
+  return out;
+};
+
+const TOPIC_EDITABLE_FIELDS = ["name", "code", "order", "isActive"];
+const QUESTION_EDITABLE_FIELDS = [
+  "examType", "topic", "difficulty", "questionText",
+  "optionA", "optionB", "optionC", "optionD",
+  "correctOption", "explanation", "diagramSvg", "diagramImage", "diagramSource", "topicId",
+];
+
+/**
+ * Columns an admin may write through this endpoint.
+ *
+ * WHY AN ALLOW-LIST AND NOT A DENY-LIST
+ *
+ * This handler used to spread the whole request body into prisma.user.update.
+ * Every column on User was therefore writable by anyone who reached it, which
+ * is two separate escalations:
+ *
+ *   - `{"role":"superadmin"}` — any `admin` promotes themselves, or a
+ *     colleague, past every check in adminIdentifier.
+ *   - `{"otpHash":"<hmac of 000000>","otpPurpose":"LOGIN","otpExpiresAt":"…"}`
+ *     — plant a known login code on ANY account, then sign in as that user.
+ *     Full account takeover of every user on the site, including other admins.
+ *
+ * A deny-list would have to be updated every time a column is added to User,
+ * and the day someone forgets is the day the hole reopens. An allow-list fails
+ * the other way: a new column is simply not writable here until someone adds
+ * it on purpose. Role changes are deliberately absent — granting roles is a
+ * separate, audited action, not a field on the edit form.
+ */
+const USER_EDITABLE_FIELDS = ["name", "email", "phone", "bio", "photoUrl", "preferredMedium", "isVerified"];
+
 export const updateUser = async (req, res) => {
   try {
     const { id } = req.params;
-    const { password, ...data } = req.body; // Extract password if sent
+    const { password } = req.body;
+
+    const data = {};
+    for (const field of USER_EDITABLE_FIELDS) {
+      if (req.body[field] !== undefined) data[field] = req.body[field];
+    }
 
     // If admin wants to reset password
     if (password) {
         data.passwordHash = await bcrypt.hash(password, 10);
+        // A password the account holder did not choose invalidates any code
+        // sitting on the row — otherwise a stale OTP is still a second way in
+        // to an account that was just taken over administratively.
+        data.otpHash = null;
+        data.otpPurpose = null;
+        data.otpExpiresAt = null;
+    }
+
+    if (!Object.keys(data).length) {
+      return res.status(400).json({ success: false, error: "No editable fields supplied" });
     }
 
     const user = await prisma.user.update({
@@ -174,8 +238,16 @@ export const deleteUser = async (req, res) => {
 export const getPendingUsers = async (req, res) => {
   try {
     // Usually we don't need pagination for pending users as they should be few
+    //
+    // `select`, not a bare findMany. PendingUser holds a bcrypt passwordHash
+    // and the HMAC otpHash, and returning the row verbatim shipped both to the
+    // browser: the password hash is then harvestable and crackable offline at
+    // the attacker's leisure, and the OTP hash lets anyone who can open the
+    // admin panel — or anyone who later reads that response out of a log, a
+    // proxy or a browser cache — complete a signup they do not own.
     const pendingUsers = await prisma.pendingUser.findMany({
-      orderBy: { createdAt: 'desc' }
+      orderBy: { createdAt: 'desc' },
+      select: { email: true, name: true, otpExpiresAt: true, createdAt: true },
     });
     res.json({ success: true, data: pendingUsers });
   } catch (error) {
@@ -219,13 +291,17 @@ export const getAllCategories = async (req, res) => {
   }
 };
 
+/** See USER_EDITABLE_FIELDS for why these are allow-lists rather than spreads. */
+const CATEGORY_EDITABLE_FIELDS = ["name", "code", "description", "isActive"];
+
 export const updateCategory = async (req, res) => {
   try {
     const { id } = req.params;
-    const updated = await prisma.examCategory.update({
-      where: { id },
-      data: req.body
-    });
+    const data = pick(req.body, CATEGORY_EDITABLE_FIELDS);
+    if (!Object.keys(data).length) {
+      return res.status(400).json({ success: false, error: "No editable fields supplied" });
+    }
+    const updated = await prisma.examCategory.update({ where: { id }, data });
     res.json({ success: true, data: updated });
   } catch (error) {
     res.status(400).json({ success: false, error: "Update failed" });
@@ -278,10 +354,11 @@ export const getTopicsByCategory = async (req, res) => {
 export const updateTopic = async (req, res) => {
   try {
     const { id } = req.params;
-    const updated = await prisma.examTopic.update({
-      where: { id },
-      data: req.body
-    });
+    const data = pick(req.body, TOPIC_EDITABLE_FIELDS);
+    if (!Object.keys(data).length) {
+      return res.status(400).json({ success: false, error: "No editable fields supplied" });
+    }
+    const updated = await prisma.examTopic.update({ where: { id }, data });
     res.json({ success: true, data: updated });
   } catch (error) {
     res.status(400).json({ success: false, error: "Update failed" });
@@ -383,10 +460,18 @@ export const createQuestion = async (req, res) => {
 export const updateQuestion = async (req, res) => {
   try {
     const { id } = req.params;
-    const question = await prisma.testQuestion.update({ where: { id }, data: req.body });
+    // `sessionId` and `indexInSession` are deliberately not editable: moving a
+    // question between sessions through a field spread would break the
+    // @@unique([sessionId, indexInSession]) ordering that the runner and the
+    // result page both index by, and silently renumber somebody's paper.
+    const data = pick(req.body, QUESTION_EDITABLE_FIELDS);
+    if (!Object.keys(data).length) {
+      return res.status(400).json({ success: false, error: "No editable fields supplied" });
+    }
+    const question = await prisma.testQuestion.update({ where: { id }, data });
     res.json({ success: true, data: question });
-  } catch (e) { 
-    res.status(400).json({ success: false, error: e.message }); 
+  } catch (e) {
+    res.status(400).json({ success: false, error: e.message });
   }
 };
 
