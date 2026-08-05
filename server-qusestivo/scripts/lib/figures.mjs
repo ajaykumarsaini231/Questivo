@@ -50,7 +50,17 @@ const FOOTER_PT = 34;
  * every question that ended a page came out seventeen times taller than its
  * three siblings: one line of text above an empty half-page.
  */
-const FOOTER_LINE = /^(?:Organi[sz]ing Institute|Page\s+\d+\s+of\s+\d+\b)/i;
+const FOOTER_LINE =
+  /^(?:Organi[sz]ing Institute|Page\s+\d+\s+of\s+\d+\b)|^JEE\s*\(|Held\s+on\s+(?:Sun|Mon|Tues|Wednes|Thurs|Fri|Satur)day/i;
+/**
+ * How far above a matched footer line the rest of the footer may sit.
+ *
+ * A running footer is a BAND, not a line: ALLEN's 2023 paper sets
+ * "JEE(Advanced) 2023/Paper-1/Held on Sunday 04th June, 2023" at y=758, the
+ * superscript "th" at 754 and the page number at 745. Cutting two points above
+ * the matched line left the other two printed under the question.
+ */
+const FOOTER_BAND = 24;
 /** A footer sits in the bottom margin; anything higher is the question. */
 const FOOTER_ZONE = 0.85;
 /** Skip the running header when a question continues onto the next page. */
@@ -153,8 +163,12 @@ function structureOf(doc, pattern) {
   const solutions = [];
   /** "Choose the correct answer..." — the options begin after it. */
   const instructions = [];
-  /** page → y of its running footer, where the page prints one. */
+  /** page → y of the top of its running footer, where the page prints one. */
   const footers = new Map();
+  /** page → y of every line in the bottom margin, footer or not. */
+  const zoneLines = new Map();
+  /** page → y of the highest line down there that reads like a footer. */
+  const footerHit = new Map();
   /** Every text block's box, for locating the cell a question number labels. */
   const blocks = [];
   /** Page and y of the first "SECTION-A" heading, if the file has one. */
@@ -208,9 +222,15 @@ function structureOf(doc, pattern) {
 
         // The running footer, taken only from the bottom margin: "Page 41 of
         // 65" would otherwise also match a cross-reference inside a stem.
-        if (FOOTER_LINE.test(text) && at.y > pageH * FOOTER_ZONE) {
-          const seen = footers.get(p);
-          if (seen === undefined || at.y < seen) footers.set(p, at.y);
+        // Every line down here is remembered, not just the matching one — the
+        // band it belongs to is resolved once the page has been read.
+        if (at.y > pageH * FOOTER_ZONE) {
+          if (!zoneLines.has(p)) zoneLines.set(p, []);
+          zoneLines.get(p).push(at.y);
+          if (FOOTER_LINE.test(text)) {
+            const seen = footerHit.get(p);
+            if (seen === undefined || at.y < seen) footerHit.set(p, at.y);
+          }
         }
 
         if (/^Sol\b\.?/i.test(text)) { solutions.push(at); stops.push(at); continue; }
@@ -245,6 +265,16 @@ function structureOf(doc, pattern) {
       }
     }
   }
+  // A page that prints a footer has its whole footer band excluded, not just
+  // the line that identified it. Bounded to FOOTER_BAND so a page whose last
+  // question runs down into the bottom margin keeps that question.
+  for (const [p, hit] of footerHit) {
+    const top = (zoneLines.get(p) ?? [])
+      .filter((y) => y >= hit - FOOTER_BAND)
+      .reduce((m, y) => Math.min(m, y), hit);
+    footers.set(p, top);
+  }
+
   // Anything before SECTION-A is front matter, not the paper.
   const afterStart = (a) =>
     !paperStart || a.page > paperStart.page || (a.page === paperStart.page && a.y >= paperStart.y);
@@ -274,10 +304,10 @@ function renderRectPixmap(page, rect, scale = SCALE) {
   return pix;
 }
 
-function renderRect(page, rect, scale = SCALE) {
+function renderRect(page, rect, scale = SCALE, trimSides = true) {
   const pix = renderRectPixmap(page, rect, scale);
   try {
-    return toTrimmedPNG(pix);
+    return toTrimmedPNG(pix, trimSides);
   } finally {
     pix.destroy?.();
   }
@@ -313,7 +343,7 @@ const RULE_FRACTION = 0.85;
  * Returns null when there is nothing but blank and rules, so an empty box is
  * never written and the row simply has no image for that part.
  */
-function trimToInk(pix) {
+function trimToInk(pix, trimSides = true) {
   const w = pix.getWidth();
   const h = pix.getHeight();
   if (!w || !h) return null;
@@ -364,11 +394,18 @@ function trimToInk(pix) {
   if (top === h) return null;
   let bottom = h - 1;
   while (bottom > top && emptyRow(bottom)) bottom--;
+
+  // The sides are kept whole when the caller asked for the page's full width.
+  // Trimming them is what makes one question's picture 262pt wide and the next
+  // one 590pt: the cut follows the longest line of ink, so a short question
+  // comes out narrow and reads on screen as though it were cropped in half.
   let left = 0;
-  while (left < w && emptyCol(left)) left++;
-  if (left === w) return null;
   let right = w - 1;
-  while (right > left && emptyCol(right)) right--;
+  if (trimSides) {
+    while (left < w && emptyCol(left)) left++;
+    if (left === w) return null;
+    while (right > left && emptyCol(right)) right--;
+  }
 
   // A rule immediately beside the content belongs to the content.
   //
@@ -390,13 +427,16 @@ function trimToInk(pix) {
   };
   top = grow(top, -1, h - 1, ruleRow);
   bottom = grow(bottom, 1, h - 1, ruleRow);
-  left = grow(left, -1, w - 1, ruleCol);
-  right = grow(right, 1, w - 1, ruleCol);
 
   top = Math.max(0, top - TRIM_PAD);
-  left = Math.max(0, left - TRIM_PAD);
   bottom = Math.min(h - 1, bottom + TRIM_PAD);
-  right = Math.min(w - 1, right + TRIM_PAD);
+
+  if (trimSides) {
+    left = grow(left, -1, w - 1, ruleCol);
+    right = grow(right, 1, w - 1, ruleCol);
+    left = Math.max(0, left - TRIM_PAD);
+    right = Math.min(w - 1, right + TRIM_PAD);
+  }
 
   const tw = right - left + 1;
   const th = bottom - top + 1;
@@ -441,8 +481,8 @@ function discard(dir, name) {
 }
 
 /** Trim, encode, and clean up whichever pixmap the trim produced. */
-function toTrimmedPNG(pix) {
-  const trimmed = trimToInk(pix);
+function toTrimmedPNG(pix, trimSides = true) {
+  const trimmed = trimToInk(pix, trimSides);
   if (!trimmed) return null;
   const png = trimmed.asPNG();
   if (trimmed !== pix) trimmed.destroy?.();
@@ -464,7 +504,7 @@ function toTrimmedPNG(pix) {
  * directly would work only without clipping, and page 5's footer would then
  * print across the top of page 6's content.
  */
-function renderSpan(regions, scale = SCALE) {
+function renderSpan(regions, scale = SCALE, trimSides = true) {
   const pix = regions.map((r) => renderRectPixmap(r.page, r.rect, scale));
   try {
     const width = Math.max(...pix.map((p) => p.getWidth()));
@@ -486,7 +526,7 @@ function renderSpan(regions, scale = SCALE) {
       top += h;
     }
     try {
-      return toTrimmedPNG(out);
+      return toTrimmedPNG(out, trimSides);
     } finally {
       out.destroy?.();
     }
@@ -583,7 +623,16 @@ function optionRects(marks, colX0, colX1, bottom, forcedLabels) {
  * @returns {{written:number, missing:number[],
  *            parts: Map<string,{stem?:string, options?:object, solution?:string, optionsInStem?:boolean}> keyed by baseName; missing holds baseNames}}
  */
-export function extractFigures({ pdfPath, outDir, wanted, mode }) {
+/**
+ * @param {boolean} [fullWidth]
+ *   Cut every crop at the page's own edges and leave the sides untrimmed, so
+ *   each image is the width of the paper it came from. Set for sources whose
+ *   questions are published as one picture rather than as a stem plus four
+ *   option crops — see the ALLEN JEE Advanced converter. Off elsewhere: a
+ *   per-option crop has to be trimmed to its own choice or the four of them
+ *   are four page-wide bands with a few words in the corner.
+ */
+export function extractFigures({ pdfPath, outDir, wanted, mode, fullWidth = false }) {
   const parts = new Map();
   if (!wanted.length) return { written: 0, missing: [], parts };
 
@@ -667,8 +716,11 @@ export function extractFigures({ pdfPath, outDir, wanted, mode }) {
     // These pages carry a black rule down the binding margin, and a crop that
     // began at x=0 put a thick black bar down the side of every image.
     const colEdge = twoUp ? (a.x < mid ? 0 : mid) : 0;
-    const colX0 = Math.max(colEdge, a.x - PAD * 2);
-    const colX1 = twoUp ? (a.x < mid ? mid : a.pageW - PAD) : a.pageW - PAD;
+    // Full width means the sheet's own edges — not the question's left margin,
+    // and not the page less an inset. Anything narrower is what reads on screen
+    // as a question cut in half.
+    const colX0 = fullWidth ? 0 : Math.max(colEdge, a.x - PAD * 2);
+    const colX1 = fullWidth ? a.pageW : twoUp ? (a.x < mid ? mid : a.pageW - PAD) : a.pageW - PAD;
 
     const sameColumn = (o) => !twoUp || (o.x < mid) === (a.x < mid);
     const below = (o) => o.page === a.page && o.y > a.y + 4 && sameColumn(o);
@@ -743,7 +795,7 @@ export function extractFigures({ pdfPath, outDir, wanted, mode }) {
     const mine = { };
     const write = (name, rect) => {
       try {
-        const png = renderRect(page, rect);
+        const png = renderRect(page, rect, SCALE, !fullWidth);
         // Nothing but blank page and cell borders inside that rectangle. No
         // file is written: an image of empty paper beside a radio button reads
         // as a choice the examiner printed and left blank.
@@ -758,7 +810,9 @@ export function extractFigures({ pdfPath, outDir, wanted, mode }) {
     /** Write one image spanning this page and its continuation. */
     const writeSpan = (name, rect, cont) => {
       try {
-        const png = renderSpan([{ page, rect }, { page: cont.page, rect: cont.rect }]);
+        const png = renderSpan(
+          [{ page, rect }, { page: cont.page, rect: cont.rect }], SCALE, !fullWidth
+        );
         if (!png) return null;
         fs.writeFileSync(path.join(outDir, name), png);
         written++;

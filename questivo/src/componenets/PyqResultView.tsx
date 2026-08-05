@@ -273,7 +273,18 @@ export default function PyqResultView({
                       // Drawn the way the player drew it, for the same reason:
                       // reviewing a paper has to show the question you sat.
                       const image = renderMode(q) === "text" && text?.trim() ? null : crop;
-                      if (!text && !image) return null;
+                      // The whole question is one picture and the choices are
+                      // in it, so the row is just its letter — with the key and
+                      // the candidate's pick still marked against it. Same rule
+                      // as the player's, for the same reason: reviewing a paper
+                      // has to show the question that was sat.
+                      const choicesInStem =
+                        renderMode(q) === "image" &&
+                        Boolean(q.questionImage) &&
+                        !(["A", "B", "C", "D"] as const).some(
+                          (l) => (q as any)[`option${l}Image`]
+                        );
+                      if (!text && !image && !choicesInStem) return null;
 
                       const isKey = (r.correctAnswer ?? "").toUpperCase().includes(letter);
                       const isYours = (r.yourAnswer ?? "").toUpperCase().includes(letter);
@@ -302,7 +313,7 @@ export default function PyqResultView({
                                 loading="lazy"
                                 className="max-w-full"
                               />
-                            ) : (
+                            ) : choicesInStem ? null : (
                               <SafeMathRenderer text={text!} />
                             )}
                           </span>

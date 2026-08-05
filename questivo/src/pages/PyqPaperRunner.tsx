@@ -190,6 +190,20 @@ export default function PyqPaperRunner() {
   const hasPicture = Boolean(
     (mode === "image" && current?.questionImage) || current?.diagramImage
   );
+  /**
+   * The choices are inside the question's picture, so the buttons carry only
+   * their letters.
+   *
+   * A question drawn as a picture with no crop of its own for any choice was
+   * published as ONE image of the whole question — which is how the ALLEN JEE
+   * Advanced booklets are cut, because their choices are structural formulae
+   * and plots that cannot survive being sliced into four. Setting the
+   * transcribed option text beside that image would print every choice twice.
+   */
+  const choicesInStem =
+    mode === "image" &&
+    Boolean(current?.questionImage) &&
+    !(["A", "B", "C", "D"] as const).some((l) => (current as any)?.[`option${l}Image`]);
 
   /* -------------------------------- clock -------------------------------- */
 
@@ -579,7 +593,7 @@ export default function PyqPaperRunner() {
                             loading="lazy"
                             className="max-w-full"
                           />
-                        ) : text ? (
+                        ) : choicesInStem ? null : text ? (
                           <SafeMathRenderer text={text} />
                         ) : hasPicture ? (
                           <em className="text-slate-500">

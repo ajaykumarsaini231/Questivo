@@ -98,6 +98,25 @@ function measureInk(img: HTMLImageElement): Ink | null {
 
 type Rect = { x: number; y: number; w: number; h: number };
 
+/**
+ * How much of the crop's ink the window would hide, 0..1.
+ *
+ * Rows only. A question is set in full-width lines, so what a bad window costs
+ * is always lines — and the operator needs a number before saving, not a
+ * candidate discovering it in a paper.
+ */
+function hiddenInk(ink: Ink, rect: Rect): number {
+  let total = 0;
+  let inside = 0;
+  const top = Math.round(rect.y);
+  const bottom = Math.round(rect.y + rect.h);
+  for (let y = 0; y < ink.h; y++) {
+    total += ink.rows[y];
+    if (y >= top && y < bottom) inside += ink.rows[y];
+  }
+  return total ? 1 - inside / total : 0;
+}
+
 /** The tightest box round every mark on the page, padded. */
 function inkBounds(ink: Ink): Rect | null {
   const { w, h, rows, cols } = ink;
@@ -121,39 +140,65 @@ function inkBounds(ink: Ink): Rect | null {
   };
 }
 
+/** A gap this deep, as a share of the crop, is the rest of the page. */
+const FOOTER_GAP = 0.25;
+/** What is left under it may be this tall — a footer is a line or two. */
+const FOOTER_TAIL = 0.1;
+/** Where a footer may start, as a share of the crop. It is at the FOOT. */
+const FOOTER_ZONE = 0.75;
+
 /**
- * Everything up to the first real break in the page.
+ * Drop a running footer stranded under a question by a band of blank page.
  *
- * This is the one that fixes the archive's actual defect. The blank tail under
- * a last option is not empty — it ends in a running footer, which an ink
- * bounding box keeps because a footer is ink. What separates them is the GAP:
- * a choice and its footer are two blocks with a hand's width of nothing
- * between, while the lines within a choice are a few pixels apart.
+ * This is the archive's actual defect: extractFigures runs the last option's
+ * rectangle to the bottom of the question band, and the page footer sitting in
+ * that band is ink, so an ink bounding box keeps the lot. What separates the
+ * footer from the choice is a hand's width of nothing.
  *
- * The threshold is proportional so it holds for a 140px option crop and an
- * 800px stem alike, with a floor for the small ones.
+ * A threshold on the gap ALONE was the first version's mistake. It cut at the
+ * first blank run over 24px, and a question that merely has paragraphs is full
+ * of those: GATE 2026 Q38 sets its match table with 27-50px between rows, so
+ * the rule cut after "Q.38" and threw away 92% of the question — the table and
+ * both column headings.
+ *
+ * Nor can the INK decide it. The obvious guard, "a footer is a rounding error
+ * of the ink", is false exactly where this is needed: GATE 2022 Q42's option D
+ * is the four glyphs "−4, 0", and "MT … Page 28" under it carries MORE ink
+ * than the choice does.
+ *
+ * What is actually true of a running footer is where it sits. It is one or two
+ * lines, in the bottom margin, behind a gap that is the whole rest of the
+ * page — a quarter of the crop at the very least, where a paragraph break is a
+ * line or so. All three are required, so a question whose parts are merely
+ * spaced out is never touched and the worst this can do is nothing.
  */
-function firstBlock(ink: Ink): Rect | null {
+function trailingFooter(ink: Ink): Rect | null {
   const bounds = inkBounds(ink);
   if (!bounds) return null;
 
-  const gap = Math.max(24, Math.round(ink.h * 0.06));
-  let end = -1;
-  let blank = 0;
-  for (let y = bounds.y; y < bounds.y + bounds.h; y++) {
-    if (ink.rows[y] === 0) {
-      blank++;
-      // A run this long has ended the block. What came before it is the keep.
-      if (blank >= gap && end >= 0) break;
-    } else {
-      blank = 0;
-      end = y;
+  const end = bounds.y + bounds.h;
+  const gapMin = Math.max(60, Math.round(ink.h * FOOTER_GAP));
+  const tailMax = Math.max(40, Math.round(ink.h * FOOTER_TAIL));
+  const zoneTop = ink.h * FOOTER_ZONE;
+
+  let runStart = -1;
+  for (let y = bounds.y; y <= end; y++) {
+    if (y < end && ink.rows[y] === 0) {
+      if (runStart < 0) runStart = y;
+      continue;
+    }
+    if (runStart >= 0) {
+      const deepEnough = y - runStart >= gapMin;
+      const atTheFoot = y >= zoneTop;
+      const shortEnough = end - y <= tailMax;
+      if (deepEnough && atTheFoot && shortEnough) {
+        const bottom = Math.min(ink.h, runStart + TRIM_PAD);
+        return { ...bounds, h: Math.max(1, bottom - bounds.y) };
+      }
+      runStart = -1;
     }
   }
-  if (end < 0) return null;
-
-  const bottom = Math.min(ink.h, end + TRIM_PAD + 1);
-  return { ...bounds, h: bottom - bounds.y };
+  return null;
 }
 
 /* ------------------------- window ↔ rectangle ------------------------- */
@@ -379,6 +424,7 @@ export default function FigureCropper({
   };
 
   const win = nat && rect ? toWindow(rect, nat.w, nat.h) : null;
+  const hidden = ink && rect ? hiddenInk(ink, rect) : 0;
   const busy = !nat && !failed;
 
   return (
@@ -476,12 +522,12 @@ export default function FigureCropper({
         <div className="border-t border-gray-100 bg-white px-5 py-3">
           <div className="flex flex-wrap items-center gap-2">
             <button
-              onClick={() => applyAuto(firstBlock)}
+              onClick={() => applyAuto(trailingFooter)}
               disabled={!ink}
               className="flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-40"
-              title="Keep everything up to the first big blank gap — cuts a trailing page footer"
+              title="Drop a page footer left under the question by a band of blank page. Does nothing when there is real content below the gap."
             >
-              <Scissors size={14} /> Cut after the first block
+              <Scissors size={14} /> Drop a trailing footer
             </button>
             <button
               onClick={() => applyAuto(inkBounds)}
@@ -504,6 +550,17 @@ export default function FigureCropper({
                 : "—"}
             </span>
           </div>
+
+          {/* A window that hides part of the question is the one mistake this
+              dialog can make that nobody sees again until a candidate sits the
+              paper — the stored file still has the words, and every list still
+              reads as fine. So it is counted and said out loud. */}
+          {hidden > 0.02 && (
+            <p className="mt-2 text-xs font-medium text-rose-700">
+              This window hides {Math.round(hidden * 100)}% of what is printed on this crop. Use
+              “Whole image” unless you meant to cut the question down.
+            </p>
+          )}
 
           {inkBlocked && (
             <p className="mt-2 text-xs text-amber-700">

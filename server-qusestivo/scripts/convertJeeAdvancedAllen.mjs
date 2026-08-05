@@ -339,7 +339,10 @@ async function main() {
       sourceNote: SOURCE_NOTE,
       questionHash: hash(stem, stem.length < 60 ? `${paperId}|${d.subject}|${q.number}` : null),
       __printed: q.number,
-      __srcFile: (q.sources.find((s) => s.kind === "solutions") || q.sources[0]).file,
+      // Every file this question was seen in, with the number each one printed
+      // it under. The figure pass needs them ALL, not one: for 2023 the stem
+      // and the worked solution are in different PDFs.
+      __sources: q.sources,
     };
   });
 
@@ -348,35 +351,77 @@ async function main() {
   let cut = 0;
   if (!args["no-figures"]) {
     fs.mkdirSync(FIG_DIR, { recursive: true });
-    const bySource = new Map();
+
+    /**
+     * Which PDF each crop is cut from, which is not one PDF per question.
+     *
+     * A 2021, 2025 or 2026 booklet prints the question and the worked solution
+     * together, so one file gives both. 2023 is SPLIT — _Paper.pdf holds the
+     * stems, _Solution.pdf holds only "7. Ans. (A)" and the working — and
+     * cutting from whichever file the row happened to prefer published 34 of
+     * the 86 questions of 2023 as a picture of the words "7. Ans. (A)".
+     *
+     * So the passes are separated by what they are FOR, and the question pass
+     * runs second: both write `_Q.png`, and the one cut from the paper is the
+     * one that must survive.
+     */
+    const solutionPass = new Map();
+    const questionPass = new Map();
+    const add = (map, file, r, printed) => {
+      if (!map.has(file)) map.set(file, []);
+      map.get(file).push({ row: r, printed });
+    };
     for (const r of rows) {
-      if (!bySource.has(r.__srcFile)) bySource.set(r.__srcFile, []);
-      bySource.get(r.__srcFile).push(r);
+      const sources = r.__sources ?? [];
+      const sol = sources.find((s) => s.kind === "solutions");
+      const paper = sources.find((s) => s.kind === "questions");
+      const first = sol ?? paper ?? sources[0];
+      if (first) add(solutionPass, first.file, r, first.printed ?? r.__printed);
+      // Only when the stems live somewhere else — otherwise the pass above
+      // already cut the question from the file that prints it.
+      if (paper && (!sol || paper.file !== sol.file)) {
+        add(questionPass, paper.file, r, paper.printed ?? r.__printed);
+      }
     }
-    for (const [file, group] of bySource) {
+
+    for (const [pass, wantSolution] of [[solutionPass, true], [questionPass, false]])
+    for (const [file, entries] of pass) {
+      const group = entries.map((e) => e.row);
       try {
         const { written, parts } = extractFigures({
           pdfPath: path.join(dir, file),
           outDir: FIG_DIR,
           mode: "allen",
-          wanted: group.map((r) => ({
-            printedNumber: r.__printed,
-            baseName: r.figureBase,
-            wantOptions: r.questionType !== "numerical",
-            wantSolution: true,
+          // One picture per question, cut at the sheet's own edges.
+          //
+          // These booklets set their choices as chemical structures, plots and
+          // stacked fractions, and splitting those into four crops is where
+          // every defect came from: a choice cut at the page midline, a stem
+          // that stopped above options no crop had captured, four page-wide
+          // bands with a formula in one corner. The paper already prints the
+          // question and its choices as one block, so that is what is cut, and
+          // the candidate picks A/B/C/D against it.
+          fullWidth: true,
+          wanted: entries.map((e) => ({
+            // The number THIS file printed it under. A split 2023 paper and
+            // its solution booklet do not always agree.
+            printedNumber: e.printed,
+            baseName: e.row.figureBase,
+            wantOptions: false,
+            wantSolution,
           })),
         });
         cut += written;
-        for (const r of group) {
-          const p = parts.get(r.__printed);
+        for (const e of entries) {
+          const p = parts.get(e.row.figureBase);
           if (!p) continue;
+          const r = e.row;
           const url = (f) => (f ? (BASE ? `${BASE}/${f}` : f) : null);
-          r.questionImage = url(p.stem);
-          r.optionAImage = url(p.options?.A);
-          r.optionBImage = url(p.options?.B);
-          r.optionCImage = url(p.options?.C);
-          r.optionDImage = url(p.options?.D);
-          r.solutionImage = url(p.solution);
+          // The question pass runs last and its stem wins; the solution pass
+          // is the only one that produces a solution, so neither overwrites
+          // the other with a null.
+          if (p.stem) r.questionImage = url(p.stem);
+          if (p.solution) r.solutionImage = url(p.solution);
           if (r.questionImage) r.diagramImage = r.questionImage;
         }
       } catch (e) { problems.push(`${file}: figure pass — ${e.message}`); }
@@ -414,7 +459,7 @@ async function main() {
     }
   }
 
-  rows.forEach((r) => { delete r.__printed; delete r.__srcFile; });
+  rows.forEach((r) => { delete r.__printed; delete r.__sources; });
   fs.mkdirSync(path.dirname(OUT), { recursive: true });
   fs.writeFileSync(OUT, JSON.stringify(rows, null, 2));
 
