@@ -134,6 +134,13 @@ async function main() {
 
   const years = [...papers.keys()].filter((y) => !ONLY || y === ONLY).sort();
   const rows = [];
+  /**
+   * Rows the parser could not read in order, held by identity rather than
+   * written onto the row: the flagging pass below runs after the figures, and
+   * a field invented here would travel into the import as one the schema does
+   * not have.
+   */
+  const scrambled = new WeakSet();
   const problems = [];
   const skipped = [];
   /** year → the crops to make, once the rows for that year are built. */
@@ -196,6 +203,7 @@ async function main() {
     for (const q of questions) {
       const k = keyMap.get(q.number);
       const row = toRow(q, k, facets, paper);
+      if (q.interleaved) scrambled.add(row);
       rows.push(row);
       wanted.push({
         printedNumber: q.number,
@@ -283,9 +291,16 @@ async function main() {
     // there but not in an order anyone can read, and a page number is stranded
     // in the middle of it. The tell is that footer residue. The crop is the
     // truthful rendering of these, so the flag points the UI at it.
+    // Two tells, and the second one exists because the first is not always
+    // left behind: a footer that comes back WHOLE is scrubbed by the parser
+    // before this sees it, and the question then looks clean while its stem is
+    // in two pieces on either side of its options. 2026 Q10 — a pattern-
+    // matching question whose four candidate tiles are figures — read "Which
+    // one of the patterns labelled P, Q, R, and S figure? P R" and was served
+    // as though that were a question.
     const FURNITURE = /Metallurgical Engineering \(MT\)|Organi[sz]ing Institute|Page\s+\d+\s+of/gi;
     const text = [r.questionText, r.optionA, r.optionB, r.optionC, r.optionD].join(" ");
-    if (FURNITURE.test(text)) {
+    if (scrambled.has(r) || FURNITURE.test(text)) {
       interleaved++;
       flag("text interleaved with a figure or table");
       // Now that it has been recorded, take the footer back out so the stem

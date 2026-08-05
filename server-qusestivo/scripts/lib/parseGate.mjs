@@ -114,8 +114,63 @@ function splitOptions(text) {
 const STRIP = [
   /Organi[sz]ing Institute[^\n]*/gi,
   /^\s*(?:GATE\s*20\d\d\s*)?Metallurgical\s+Engineering\s*\(MT\)\s*$/gim,
-  /^\s*Page\s+\d+\s+of\s+\d+\s*$/gim,
+  /^\s*(?:MT\s+)?Page\s+\d+(?:\s+of\s+\d+)?\s*$/gim,
 ];
+
+/**
+ * The heading that opens a block — "Q.11 – Q.35 Carry ONE mark Each".
+ *
+ * It is skipped when looking for where a question STARTS, or the paper would
+ * come out one question adrift. Nothing stopped it landing inside the question
+ * BEFORE it, though: a body runs to the next question, so the last question of
+ * every block swallowed the heading of the next one and it surfaced in that
+ * question's option D — "(D) rhombus Q.11 – Q.35 Carry ONE mark Each". Nineteen
+ * questions across five papers, always Q5, Q10 or Q35.
+ */
+const BLOCK_HEADING =
+  /^Q\s*\.\s*\d{1,3}\s*[–—-]\s*Q\s*\.\s*\d{1,3}\b|^Carry\s+(?:ONE|TWO)\s+marks?\s+Each\b/i;
+
+/**
+ * One row of a match-the-column table, as the extractor flattens it.
+ *
+ * The paper sets these two columns wide apart, but the column gap is whitespace
+ * and the extractor collapses it, so "(P) Paris Law" and "(1) Creep" arrive
+ * welded into one line. Joined into a stem, that reads as though the paper had
+ * already paired them — a candidate reading the transcription of GATE MT 2026
+ * Q37 is told P–1, Q–2, R–3, S–4, when the answer is P–2, Q–4, R–1, S–3. The
+ * columns are pulled apart again below and listed one after the other.
+ */
+const TABLE_ROW = /^\(\s*([P-S])\s*\)\s*(.+?)\s*\(\s*([1-4])\s*\)\s*(.+)$/;
+/** Its heading, welded the same way: "Column I Column II". */
+const TABLE_HEADING =
+  /^((?:Column|Section|List|Group)\s+I)\s+((?:Column|Section|List|Group)\s+II)\s*$/i;
+
+/**
+ * Re-lay a welded match table as the two lists it is.
+ *
+ * Only where at least two rows agree on the shape: one "(P) x (1) y" line on
+ * its own is as likely to be a sentence that quotes both markers.
+ */
+function unweldColumns(lines) {
+  const out = [];
+  for (let i = 0; i < lines.length; ) {
+    const head = TABLE_HEADING.exec(lines[i]);
+    const left = [];
+    const right = [];
+    let j = head ? i + 1 : i;
+    for (; j < lines.length; j++) {
+      const row = TABLE_ROW.exec(lines[j]);
+      if (!row) break;
+      left.push(`(${row[1]}) ${row[2].trim()}`);
+      right.push(`(${row[3]}) ${row[4].trim()}`);
+    }
+    if (left.length < 2) { out.push(lines[i]); i++; continue; }
+    if (head) out.push(head[1], ...left, head[2], ...right);
+    else out.push(...left, ...right);
+    i = j;
+  }
+  return out;
+}
 
 /**
  * A line that BEGINS with an option marker.
@@ -131,16 +186,31 @@ const STARTS_OPTION = /^\(\s*[A-D]\s*\)/;
  * Every question in one GATE paper.
  *
  * @param {string[]} lines  from extractLines(buffer)
- * @returns {{number, questionText, options}[]}
+ * @returns {{number, questionText, options, interleaved}[]}
+ *   `interleaved` means the reading order broke around a figure and the words
+ *   cannot be trusted, whatever they say — see below.
  */
 export function parseGatePaper(lines) {
-  const clean = lines
-    .map((l) => {
-      let s = l;
-      for (const re of STRIP) s = s.replace(re, " ");
-      return s.replace(/\s+/g, " ").trim();
-    })
-    .filter(Boolean);
+  // Furniture lines are dropped, as they always were, but the FACT of one is
+  // kept: `afterBreak[i]` says a running header or footer stood between line
+  // i and the line before it. That is the page break, and where a question's
+  // own text resumes after it — below its options — the extractor has read a
+  // figure's two columns out of order and nothing in the words says so.
+  const clean = [];
+  const afterBreak = [];
+  let broke = false;
+  for (const line of lines) {
+    let s = line;
+    for (const re of STRIP) s = s.replace(re, " ");
+    const text = s.replace(/\s+/g, " ").trim();
+    if (!text) {
+      if (s !== line) broke = true;
+      continue;
+    }
+    clean.push(text);
+    afterBreak.push(broke);
+    broke = false;
+  }
 
   // Where each question starts. Section headings match the question pattern
   // too — "Q.1 – Q.5 Carry ONE mark Each" — and taking one as question 1 would
@@ -185,24 +255,40 @@ export function parseGatePaper(lines) {
   }
 
   return starts.map((s, idx) => {
-    const to = idx + 1 < starts.length ? starts[idx + 1].from : clean.length;
-    const body = [s.rest, ...clean.slice(s.line + 1, to)]
-      .filter(Boolean)
+    let to = idx + 1 < starts.length ? starts[idx + 1].from : clean.length;
+    // The next block's heading is not part of this question. It sits between
+    // two questions and belongs to neither, and left in it became the tail of
+    // the last option of whichever question preceded it.
+    for (let i = s.line + 1; i < to; i++) {
+      if (BLOCK_HEADING.test(clean[i])) { to = i; break; }
+    }
+
+    const own = clean.slice(s.line + 1, to);
+
+    // The question's own words resume after a page break that follows its
+    // options: the extractor has read a figure's columns out of order, so the
+    // sentence is in pieces and the pieces are in the wrong places. GATE MT
+    // 2026 Q10 asks "Which one of the patterns labelled P, Q, R, and S" and
+    // completes itself, three lines below its option D, with "is used to
+    // generate the following". No arrangement of that text is the question;
+    // the crop is, and the caller is told so rather than left to guess from
+    // furniture that this function has already scrubbed.
+    let lastOption = -1;
+    for (let i = 0; i < own.length; i++) if (STARTS_OPTION.test(own[i])) lastOption = i;
+    const interleaved =
+      lastOption >= 0 &&
+      own.slice(lastOption + 1).some((_, k) => afterBreak[s.line + 1 + lastOption + 1 + k]);
+
+    const body = unweldColumns([s.rest, ...own].filter(Boolean))
       .join(" ")
       .replace(/\s+/g, " ")
       .trim();
-    // Footer residue is deliberately LEFT IN. A question printed beside a
-    // figure, or a match-the-column table, is typeset in two columns with the
-    // footer between them, so "Page 2 of 38" comes back cut in half with
-    // question text wedged into the gap — and that is the only reliable signal
-    // that the columns interleaved and the text cannot be trusted. Scrubbing it
-    // here would leave a scrambled stem looking clean. The caller flags on it,
-    // then cleans.
     const split = splitOptions(body);
     return {
       number: s.n,
       questionText: (split ? body.slice(0, split.questionEnd) : body).trim(),
       options: split?.options ?? null,
+      interleaved,
     };
   });
 }
