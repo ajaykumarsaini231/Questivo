@@ -37,8 +37,22 @@ import * as mupdf from "mupdf";
 
 /** Rendered at 2x so the maths stays sharp on a retina screen. */
 const SCALE = 2;
-/** Trim the advertising footer off a crop. */
+/** Trim the advertising footer off a crop, when the page does not name one. */
 const FOOTER_PT = 34;
+
+/**
+ * The running footer, so a crop can stop above it rather than at a guess.
+ *
+ * A fixed 34pt inset is one page design's answer to a question every publisher
+ * answers differently. GATE sets its footer 38pt up a 791pt page, so the inset
+ * landed INSIDE it and left the top few pixels of "Page 41 of 65" at the foot
+ * of the crop — enough ink to defeat the whitespace trim, so the last option of
+ * every question that ended a page came out seventeen times taller than its
+ * three siblings: one line of text above an empty half-page.
+ */
+const FOOTER_LINE = /^(?:Organi[sz]ing Institute|Page\s+\d+\s+of\s+\d+\b)/i;
+/** A footer sits in the bottom margin; anything higher is the question. */
+const FOOTER_ZONE = 0.85;
 /** Skip the running header when a question continues onto the next page. */
 const HEADER_PT = 62;
 /** A crop shorter than this caught nothing useful. */
@@ -95,6 +109,8 @@ function structureOf(doc, pattern) {
   const solutions = [];
   /** "Choose the correct answer..." — the options begin after it. */
   const instructions = [];
+  /** page → y of its running footer, where the page prints one. */
+  const footers = new Map();
   /** Page and y of the first "SECTION-A" heading, if the file has one. */
   let paperStart = null;
 
@@ -129,6 +145,13 @@ function structureOf(doc, pattern) {
           instructions.push(at);
         }
 
+        // The running footer, taken only from the bottom margin: "Page 41 of
+        // 65" would otherwise also match a cross-reference inside a stem.
+        if (FOOTER_LINE.test(text) && at.y > pageH * FOOTER_ZONE) {
+          const seen = footers.get(p);
+          if (seen === undefined || at.y < seen) footers.set(p, at.y);
+        }
+
         if (/^Sol\b\.?/i.test(text)) { solutions.push(at); stops.push(at); continue; }
         if (/^(Official\s*Ans|Allen\s*Ans)/i.test(text)) { stops.push(at); continue; }
 
@@ -159,7 +182,7 @@ function structureOf(doc, pattern) {
   const afterStart = (a) =>
     !paperStart || a.page > paperStart.page || (a.page === paperStart.page && a.y >= paperStart.y);
 
-  return { questions: questions.filter(afterStart), options, stops, solutions, instructions };
+  return { questions: questions.filter(afterStart), options, stops, solutions, instructions, footers };
 }
 
 /**
@@ -410,18 +433,28 @@ function renderSpan(regions, scale = SCALE) {
  * rectangle runs from its own marker across to the next marker on the same row
  * (or the column edge), and down as far as the next row begins.
  */
-function optionRects(marks, colX0, colX1, bottom) {
+function optionRects(marks, colX0, colX1, bottom, forcedLabels) {
   if (!marks.length) return {};
 
-  // Which label set this paper uses, read from the page rather than assumed.
+  // Which label set this paper uses, read from the page rather than assumed —
+  // unless the caller knows, in which case counting is worse than useless.
   //
   // It does not follow from the publisher: ALLEN's 2022 booklets print
   // "(A) (B) (C) (D)" and its 2023 ones print "(1) (2) (3) (4)". Assuming
   // letters for every ALLEN file found no markers at all in 2023 and silently
   // dropped 2,687 option crops.
+  //
+  // Counting is the wrong test for a MATCH-THE-COLUMN question, though, and
+  // that is why a caller may override it. Such a question prints "(1)".."(4)"
+  // down Column II of its table and its four real choices as "(A)".."(D)"
+  // below — an exact tie, which this resolved in favour of the digits. The
+  // crops then became the four Column II TERMS, and the stem was cut off above
+  // them at the table's own heading: four answers no one offered, under half a
+  // question.
   const numeric = marks.filter((m) => /[1-4]/.test(m.label)).length;
   const alpha = marks.filter((m) => /[A-D]/.test(m.label)).length;
-  const labels = numeric >= alpha ? ["1", "2", "3", "4"] : ["A", "B", "C", "D"];
+  const labels =
+    forcedLabels ?? (numeric >= alpha ? ["1", "2", "3", "4"] : ["A", "B", "C", "D"]);
 
   // Group into rows by baseline.
   const rows = [];
@@ -477,7 +510,7 @@ function optionRects(marks, colX0, colX1, bottom) {
  * @param {string} o.outDir
  * @param {Array<{printedNumber:number, baseName:string, occurrence?:number,
  *                wantOptions?:boolean, wantSolution?:boolean}>} o.wanted
- * @param {"mathongo"|"allen"} o.mode
+ * @param {"mathongo"|"allen"|"gate"} o.mode
  * @returns {{written:number, missing:number[],
  *            parts: Map<string,{stem?:string, options?:object, solution?:string, optionsInStem?:boolean}> keyed by baseName; missing holds baseNames}}
  */
@@ -494,8 +527,20 @@ export function extractFigures({ pdfPath, outDir, wanted, mode }) {
     mode === "gate" ? /^Q\s*\.\s*(\d{1,3})\b/
     : mode === "mathongo" ? /^Q\s*(\d{1,3})\s*\./
     : /^(\d{1,3})\s*\./;
-  const { questions: anchors, options: optionMarks, stops, solutions, instructions } =
+
+  // GATE has printed its choices as "(A)".."(D)" in every paper of this
+  // archive — the text parser splits on nothing else, and all 325 questions
+  // come out with option text. Its match-the-column questions number Column II
+  // "(1)".."(4)", so the label set has to be stated here rather than counted
+  // off the page. The two-up coaching booklets genuinely vary and keep the
+  // detection.
+  const forcedLabels = mode === "gate" ? ["A", "B", "C", "D"] : null;
+  const { questions: anchors, options: optionMarks, stops, solutions, instructions, footers } =
     structureOf(doc, pattern);
+
+  /** How far down a page a crop may go: above its footer, else the old inset. */
+  const contentBottom = (pageIndex, pageH) =>
+    footers.has(pageIndex) ? footers.get(pageIndex) - 2 : pageH - FOOTER_PT;
 
   const byNumber = new Map();
   for (const a of anchors) {
@@ -559,7 +604,7 @@ export function extractFigures({ pdfPath, outDir, wanted, mode }) {
     // Where this question's territory ends: the next question, or its own
     // answer line, whichever comes first.
     const ends = [nextQ?.y, nextStop?.y].filter((v) => typeof v === "number");
-    const bandBottom = ends.length ? Math.min(...ends) - 2 : a.pageH - FOOTER_PT;
+    const bandBottom = ends.length ? Math.min(...ends) - 2 : contentBottom(a.page, a.pageH);
     const bandTop = Math.max(0, a.y - PAD);
     if (bandBottom - bandTop < MIN_HEIGHT_PT) { missing.push(w.baseName); continue; }
 
@@ -606,7 +651,7 @@ export function extractFigures({ pdfPath, outDir, wanted, mode }) {
       const marks = optionMarks.filter(
         (o) => o.page === a.page && o.y >= optionsFrom && o.y <= bandBottom && sameColumn(o)
       );
-      optRects = optionRects(marks, colX0, colX1, bandBottom);
+      optRects = optionRects(marks, colX0, colX1, bandBottom, forcedLabels);
     }
 
     const firstOptionY = Object.values(optRects).length
@@ -647,7 +692,9 @@ export function extractFigures({ pdfPath, outDir, wanted, mode }) {
         ...anchors.filter(inRegion).map((o) => o.y),
         ...stops.filter(inRegion).map((o) => o.y),
       ];
-      const contBottom = endsThere.length ? Math.min(...endsThere) - 2 : a.pageH - FOOTER_PT;
+      const contBottom = endsThere.length
+        ? Math.min(...endsThere) - 2
+        : contentBottom(region?.pageIndex, a.pageH);
       // Nothing worth adding if the next question starts at the top of that
       // region — then this one really did finish where its column did.
       if (region && contBottom - HEADER_PT >= MIN_HEIGHT_PT) {
@@ -725,7 +772,7 @@ export function extractFigures({ pdfPath, outDir, wanted, mode }) {
         .filter((s) => s.page === a.page && s.y > a.y && sameColumn(s))
         .sort((p, q) => p.y - q.y)[0];
       if (sol) {
-        const solEnd = nextQ && nextQ.y > sol.y ? nextQ.y - 2 : a.pageH - FOOTER_PT;
+        const solEnd = nextQ && nextQ.y > sol.y ? nextQ.y - 2 : contentBottom(a.page, a.pageH);
         if (solEnd - sol.y >= MIN_HEIGHT_PT) {
           mine.solution = write(`${w.baseName}_S.png`, [colX0, Math.max(0, sol.y - PAD), colX1, solEnd]);
         }
