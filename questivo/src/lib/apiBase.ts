@@ -34,12 +34,27 @@ function configuredBase(): string | undefined {
   return undefined;
 }
 
+/** True for `vite build`, false for `vite dev`. */
+function isProdBuild(): boolean {
+  return typeof import.meta !== "undefined" && !!(import.meta as any).env?.PROD;
+}
+
 /**
  * No trailing slash — every caller appends its own path, and "" has to stay ""
  * so that `${API_BASE}/api/x` is the same-origin "/api/x" rather than the
  * protocol-relative "//api/x", which resolves to a host called "api".
+ *
+ * Unset falls back by build, not to one constant. A deployed bundle calling
+ * localhost is never what was meant, and "unset" is a state a deploy can reach
+ * by accident — a dashboard that will not store an empty string leaves deleting
+ * the variable as the only way to ask for same-origin. So production reads
+ * absent as same-origin, which is the answer that is right on every host, and
+ * only dev falls back to the local API.
  */
-export const API_BASE = (configuredBase() ?? "http://localhost:4000").replace(
-  /\/+$/,
-  ""
-);
+function resolve(): string {
+  const configured = configuredBase();
+  if (typeof configured === "string") return configured.replace(/\/+$/, "");
+  return isProdBuild() ? "" : "http://localhost:4000";
+}
+
+export const API_BASE = resolve();
