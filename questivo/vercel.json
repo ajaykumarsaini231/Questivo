@@ -35,6 +35,14 @@
       ]
     }
   ],
+  "redirects": [
+    {
+      "source": "/:path*",
+      "has": [{ "type": "host", "value": "questivo.vercel.app" }],
+      "destination": "https://questivo.sutradharlabs.me/:path*",
+      "permanent": true
+    }
+  ],
   "rewrites": [
     {
       "source": "/api/:path*",
@@ -42,6 +50,10 @@
     },
     {
       "source": "/tests/:path*",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/pyq/:path*",
       "destination": "/index.html"
     },
     {

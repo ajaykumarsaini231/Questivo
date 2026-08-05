@@ -7,9 +7,36 @@
 
 import { EXAMS, examPath, type Exam } from "./exams";
 
-export const SITE_URL = "https://questivo.vercel.app";
+/**
+ * The one hostname Questivo claims as its own.
+ *
+ * This is not cosmetic. It is stamped into every canonical, og:url, sitemap
+ * entry, llms.txt link, JSON-LD @id and the generated robots.txt, so if it names
+ * a host the site is not actually served from, every page tells search engines
+ * "the real version of me lives somewhere else" and hands the accumulated
+ * ranking signal to that other host. That is exactly what happened while this
+ * read `questivo.vercel.app` and the site was live on the custom domain.
+ *
+ * Read from the environment so moving domains again is one Vercel setting and a
+ * rebuild, not a code change that can be half-applied. Vite inlines this at
+ * build time for both the client and the SSR bundle the prerender step imports,
+ * so all four generated artefacts agree by construction.
+ *
+ * Whatever it is set to must also be the domain vercel.json redirects the
+ * deployment's other hostnames to — one live copy, not two.
+ */
+const ENV_SITE_URL =
+  typeof import.meta !== "undefined"
+    ? (import.meta as unknown as { env?: Record<string, string | undefined> }).env
+        ?.VITE_SITE_URL
+    : undefined;
+
+/** No trailing slash: every consumer below appends its own path. */
+export const SITE_URL = (ENV_SITE_URL || "https://questivo.sutradharlabs.me").replace(/\/+$/, "");
 export const SITE_NAME = "Questivo";
 export const TWITTER_HANDLE = "@questivo";
+/** Single locale. Emitted as hreflang + og:locale so the market is explicit. */
+export const SITE_LOCALE = "en-IN";
 
 export const DEFAULT_OG_IMAGE = `${SITE_URL}/og-image.jpg`;
 export const LOGO_URL = `${SITE_URL}/logo.png`;
@@ -26,6 +53,15 @@ export interface RouteSeo {
   ogImage?: string;
   /** Exclude from sitemap.xml and mark noindex. */
   noindex?: boolean;
+  /**
+   * Point rel=canonical at a different path than this route's own.
+   *
+   * For the case where two URLs render the identical screen — /test-setup and
+   * /pyq/setup are the same component — and the duplicate has to keep working
+   * for anything already linking to it. noindex alone does not merge the two;
+   * a canonical does.
+   */
+  canonicalPath?: string;
 }
 
 /**
@@ -34,19 +70,28 @@ export interface RouteSeo {
  */
 export const ROUTES: RouteSeo[] = [
   {
+    // Leads with previous year papers, not the generator. That is not a
+    // preference — it is what the page now says: the hero reads "real previous
+    // year questions with worked solutions", the archive is the front door, and
+    // SHOW_AI_GENERATOR is off so the writer is no longer promoted in the nav.
+    // A <title> selling an AI generator over a PYQ archive would be describing
+    // the site as it was in early August, and a snippet that does not match the
+    // page is the cheapest way to lose the click after winning the impression.
     path: "/",
-    title: "Questivo – AI Mock Test Generator for JEE, NEET, GATE, SSC & UPSC",
+    title: "Questivo – Previous Year Papers & Free Mock Tests for JEE, NEET & GATE",
     description:
-      "Questivo generates unlimited, syllabus-accurate mock tests for JEE Main, NEET UG, GATE, SSC CGL, RRB NTPC and UPSC. Get instant scoring, step-by-step explanations and AI difficulty adjustment — free to start.",
+      "Sit real previous year papers for JEE Main, JEE Advanced, NEET UG and GATE MT exactly as they were set — original clock, original marking scheme, worked solution on every question. Plus unlimited practice papers in the official exam pattern. Free.",
     keywords:
-      "AI mock test generator, JEE Main mock test, NEET UG mock test, GATE mock test, SSC CGL practice test, RRB NTPC mock test, UPSC prelims practice, online test series, free mock tests India",
-    heading: "AI-powered mock tests for India's competitive exams",
+      "previous year question papers, PYQ with solutions, JEE Main previous year paper, JEE Advanced previous year questions, NEET previous year papers, GATE MT previous year paper, free mock test, online test series India, AI mock test generator",
+    heading: "Previous year papers and free mock tests for India's competitive exams",
     facts: [
-      "Questivo is a free AI-powered mock test platform for Indian competitive exams.",
-      "Supported exams include JEE Main, NEET UG, GATE, SSC CGL, RRB NTPC and UPSC IAS.",
-      "Questions are generated to match the latest official exam blueprint and marking scheme.",
-      "Every question ships with a step-by-step explanation, not just the correct answer.",
-      "Difficulty adapts in real time to the candidate's performance during the test.",
+      "Questivo is a free practice platform for Indian competitive exams, built around real previous year question papers.",
+      "Previous year papers can be sat exactly as they were set, under the original duration and marking scheme, with nothing shuffled or generated.",
+      "Questivo's previous year archive covers JEE Main, JEE Advanced, NEET UG and GATE Metallurgical Engineering (MT).",
+      "Every previous year question can be expanded into a worked solution, including the solution as the original booklet printed it.",
+      "Where Questivo holds no previous year paper for an exam, it generates a fresh paper in that exam's official pattern instead.",
+      "Landing pages exist for JEE Main, JEE Advanced, NEET UG, GATE MT, SSC CGL, RRB NTPC and UPSC IAS.",
+      "Scoring is instant and applies the exam's own negative marking.",
       "Questivo also provides a free ATS resume analyzer and an AI mock interview studio.",
     ],
   },
@@ -72,12 +117,13 @@ export const ROUTES: RouteSeo[] = [
     path: "/exams",
     title: "All Exams – Free Previous Year Questions & AI Mock Tests | Questivo",
     description:
-      "Every exam Questivo covers: JEE Main, NEET UG, GATE MT, SSC CGL, RRB NTPC and UPSC IAS. Practise real previous year questions first, then generate unlimited fresh papers in the official exam pattern — free.",
+      "Every exam Questivo covers: JEE Main, JEE Advanced, NEET UG, GATE MT, SSC CGL, RRB NTPC and UPSC IAS. Practise real previous year questions first, then generate unlimited fresh papers in the official exam pattern — free.",
     keywords:
-      "all exams, previous year question papers, PYQ practice, free mock tests by exam, JEE NEET GATE SSC RRB UPSC previous year questions",
+      "all exams, previous year question papers, PYQ practice, free mock tests by exam, JEE Main JEE Advanced NEET GATE SSC RRB UPSC previous year questions",
     heading: "All exams on Questivo",
     facts: [
-      "Questivo covers JEE Main, NEET UG, GATE Metallurgical Engineering, SSC CGL, RRB NTPC and UPSC IAS.",
+      "Questivo covers JEE Main, JEE Advanced, NEET UG, GATE Metallurgical Engineering (MT), SSC CGL, RRB NTPC and UPSC IAS.",
+      "JEE Advanced is listed separately from JEE Main because it uses different question types and changes its marking scheme between years.",
       "Each exam page opens with real previous year questions where Questivo has them.",
       "Where no previous year questions are stored, Questivo generates a fresh paper in the official exam pattern instead.",
       "Every previous year question can be expanded into a step-by-step worked solution.",
@@ -158,21 +204,75 @@ export const ROUTES: RouteSeo[] = [
   },
   {
     // The archive, plus everything under it: /pyq/:paperId runs a paper and
-    // /pyq/attempt/:id reopens a sitting. Without an entry here every one of
-    // those pages fell through to the unknown-path branch in Seo.tsx and put
-    // "Page not found" in the tab of a page that had loaded perfectly.
+    // /pyq/attempt/:id reopens a sitting.
     //
-    // noindex, so the prerender step renders head only and the sitemap is
-    // unchanged. Promoting the archive to an indexable page is a separate
-    // decision from making its tab say the right thing.
+    // Now INDEXABLE. It was noindex when it was a new, unpromoted screen; it is
+    // now the site's front door and its only genuinely scarce asset — the
+    // generated papers are a commodity any competitor can also produce, whereas
+    // "the real 2019 GATE MT paper with the booklet's own worked solutions" is
+    // the thing people actually search for. Leaving the one page that holds it
+    // out of the index while shipping seven pages about generated papers had it
+    // exactly backwards.
+    //
+    // What a crawler gets here is head + the `facts` block: the archive itself
+    // is a live query, so the prerendered body is the same skeleton a visitor
+    // sees on first paint. That is thin, and honest. The per-exam depth lives on
+    // /mock-test/<slug>, which is where the internal links point.
     path: "/pyq",
-    title: "Previous Year Papers – Sit the Real JEE Main Paper | Questivo",
+    title: "Previous Year Question Papers with Solutions – JEE, NEET, GATE | Questivo",
     description:
-      "Sit real previous year papers exactly as they were set, under the original clock and marking scheme, and review every question afterwards.",
-    keywords: "previous year papers, JEE Main PYQ, past paper mock test",
+      "Sit real previous year papers for JEE Main, JEE Advanced, NEET UG and GATE MT exactly as they were set — every question in its original order, the original clock, the original marking scheme. Free, with a worked solution on every question.",
+    keywords:
+      "previous year question papers, previous year papers with solutions, PYQ, JEE Main previous year paper, JEE Advanced previous year questions, NEET UG previous year papers, GATE MT previous year paper, past paper mock test, solved question papers",
     heading: "Previous year papers",
+    facts: [
+      "Questivo's previous year archive holds papers for JEE Main, JEE Advanced, NEET UG and GATE Metallurgical Engineering (MT).",
+      "A previous year paper is sat exactly as it was set: every question in its original order, under the original duration and the original marking scheme.",
+      "Nothing in a previous year paper is generated, shuffled or substituted.",
+      "Papers are chosen by exam, then year, then session and shift.",
+      "The answer key and worked solution are withheld by the server until the paper is submitted, so there is no key to read mid-test.",
+      "After submitting, every question shows the correct answer, a worked solution, and where available the solution exactly as the original booklet printed it.",
+      "Scoring applies the paper's real marking scheme, including negative marking and any limit on how many Section B questions count.",
+      "Questions that were later dropped or awarded to all candidates are scored as bonus rather than as wrong.",
+      "Sitting previous year papers on Questivo is free and does not require payment details.",
+      "Signed-in candidates keep a history of past sittings and can reopen any of them.",
+    ],
+  },
+  {
+    // The guided builder. noindex — it is a form whose entire content is the
+    // visitor's own selection, so there is nothing here for a search result to
+    // be about, and the queries it would compete for are already served by /pyq
+    // and the exam pages.
+    //
+    // It is listed at all because a route that is neither prerendered nor
+    // rewritten in vercel.json returns a HARD 404 on direct visit or refresh —
+    // which is what /pyq/setup and /test-setup were both doing in production.
+    // A noindex entry still gets a real file written, so the URL answers 200.
+    path: "/pyq/setup",
+    title: "Set Up a Practice Paper – Pick Exam, Year & Topics | Questivo",
+    description:
+      "Choose an exam and build a paper from real previous year questions — by year, subject, chapter or difficulty, in the official exam pattern.",
+    keywords: "practice paper setup, chapter wise previous year questions, topic wise PYQ practice",
+    heading: "Set up a test",
+    facts: [
+      "The setup flow builds a paper by drawing from real previous year questions that match the filters chosen.",
+      "Filters are applied strictly: a paper is never quietly topped up from outside the selection.",
+    ],
+    noindex: true,
+  },
+  {
+    // The same component as /pyq/setup, reached from an older link. Kept alive
+    // rather than deleted, and pointed at the canonical of the two so the pair
+    // is never read as duplicate content.
+    path: "/test-setup",
+    title: "Set Up a Practice Paper – Pick Exam, Year & Topics | Questivo",
+    description:
+      "Choose an exam and build a paper from real previous year questions — by year, subject, chapter or difficulty, in the official exam pattern.",
+    keywords: "practice paper setup, chapter wise previous year questions, topic wise PYQ practice",
+    heading: "Set up a test",
     facts: [],
     noindex: true,
+    canonicalPath: "/pyq/setup",
   },
 ];
 
@@ -241,27 +341,43 @@ export function getRouteSeo(pathname: string): RouteSeo {
 export const FAQS: { q: string; a: string }[] = [
   {
     q: "What is Questivo?",
-    a: "Questivo is a free AI-powered mock test platform for Indian competitive exams. It generates unlimited, syllabus-accurate practice papers for JEE Main, NEET UG, GATE, SSC CGL, RRB NTPC and UPSC, then scores them instantly with step-by-step explanations.",
+    a: "Questivo is a free practice platform for Indian competitive exams. It holds real previous year question papers for JEE Main, JEE Advanced, NEET UG and GATE MT which candidates can sit exactly as they were set, and it generates fresh practice papers in the official exam pattern for the exams it has no archive for. Both are scored instantly, with a worked solution on every question.",
   },
   {
     q: "Is Questivo free to use?",
-    a: "Yes. Creating an account, generating mock tests and running an ATS resume check on Questivo are free. No payment details are required to start practising.",
+    a: "Sitting previous year papers, creating an account and running an ATS resume check are free, and no payment details are required to start. Some AI features are gated to a paid plan; the free previous year archive is not, and the site says which is which before you start.",
   },
   {
     q: "Which exams does Questivo support?",
-    a: "Questivo supports JEE Main, NEET UG, GATE (including GATE MT Metallurgy), SSC CGL, RRB NTPC and UPSC IAS, along with 50+ other competitive exam categories.",
+    a: "Questivo has dedicated pages for JEE Main, JEE Advanced, NEET UG, GATE Metallurgical Engineering (MT), SSC CGL, RRB NTPC and UPSC IAS. Of those, real previous year papers are stored for JEE Main, JEE Advanced, NEET UG and GATE MT.",
   },
   {
-    q: "How does Questivo generate mock test questions?",
-    a: "You pick an exam, subject, topics, question count and difficulty. Questivo's AI then writes a fresh paper that follows the official exam blueprint and marking scheme, including negative marking. Because every paper is generated on request, questions are never repeated between attempts.",
+    q: "Does Questivo have previous year question papers?",
+    a: "Yes. Questivo's archive holds real previous year papers for JEE Main, JEE Advanced, NEET UG and GATE Metallurgical Engineering. A paper is sat exactly as it was set — every question in its original order, under the original duration and the original marking scheme, with nothing generated or shuffled.",
   },
   {
-    q: "Are Questivo's questions the same as previous year papers?",
-    a: "No. Questivo generates new questions modelled on the official syllabus and exam pattern rather than reusing previous year papers, so candidates practise the pattern instead of memorising known questions.",
+    q: "Are the previous year papers free on Questivo?",
+    a: "Yes. Sitting a previous year paper on Questivo is free and does not require payment details. Signing in additionally saves each sitting so it can be reopened and reviewed later.",
+  },
+  {
+    q: "Can I see the answer key before finishing a previous year paper?",
+    a: "No. Questivo's server withholds the correct answer and the solution until the paper is submitted, so there is no answer key in the page or the network response to read mid-test. Both are released the moment you submit.",
   },
   {
     q: "Does Questivo explain the answers?",
-    a: "Yes. Every question includes a step-by-step explanation of the reasoning behind the correct answer, so candidates can review the method and not just the final result.",
+    a: "Yes. Every question comes with a worked solution rather than just an answer key, and for previous year papers Questivo also shows the solution exactly as the original booklet printed it where that scan exists.",
+  },
+  {
+    q: "How does Questivo score a previous year paper?",
+    a: "Scoring applies the paper's own marking scheme, including negative marking and any limit on how many Section B questions actually count. Questions that were later dropped or awarded to all candidates are scored as bonus rather than counted wrong.",
+  },
+  {
+    q: "Can I practise one chapter instead of a full paper?",
+    a: "Yes. Questivo can build a paper from previous year questions filtered by subject, chapter, year or difficulty, instead of serving a full-length paper. The filters are applied strictly — the paper is never quietly topped up with questions from outside your selection.",
+  },
+  {
+    q: "How does Questivo generate a practice paper when there is no previous year paper?",
+    a: "You pick an exam, subject, topics, question count and difficulty, and Questivo writes a fresh paper that follows the official exam blueprint and marking scheme, including negative marking. Because the paper is generated on request, those questions are not repeated between attempts.",
   },
   {
     q: "What is the Questivo ATS resume checker?",
@@ -281,16 +397,33 @@ export const FAQS: { q: string; a: string }[] = [
  * pattern the larger players use — Adda247 ships a 50KB llms.txt that is
  * essentially one `[title](url): description` line per page.
  */
-export const LLMS_INTRO = `Questivo is a free, AI-powered mock test platform for Indian competitive exams. It generates unlimited syllabus-accurate practice papers for JEE Main, NEET UG, GATE, SSC CGL, RRB NTPC and UPSC, scores them instantly with step-by-step explanations, and also provides a free ATS resume checker and a live AI mock interview studio.`;
+export const LLMS_INTRO = `Questivo is a free practice platform for Indian competitive exams, built around real previous year question papers. It holds previous year papers for JEE Main, JEE Advanced, NEET UG and GATE Metallurgical Engineering (MT) which candidates sit exactly as they were set — original order, original clock, original marking scheme — and it generates fresh papers in the official exam pattern for exams it has no archive for. Both are scored instantly with a worked solution on every question. Questivo also provides a free ATS resume checker and a live AI mock interview studio.`;
 
+/**
+ * The lines an answer engine is most likely to lift verbatim, so each one has
+ * to survive being quoted with no surrounding page.
+ *
+ * These are held to a higher bar than marketing copy: a generative engine will
+ * repeat a wrong one back to a candidate as fact, with Questivo's name attached
+ * and no way for the reader to check it. The second fact here previously said
+ * Questivo does NOT reuse previous year papers, which was true when it was
+ * written and became false the moment the archive shipped — exactly the failure
+ * mode this comment exists to prevent. If a claim below stops being true, it is
+ * a bug, not stale copy.
+ */
 export const LLMS_FACTS = [
-  "Questivo is free to start; no payment details are required to generate a mock test.",
-  "Questivo generates new questions modelled on the official syllabus and exam pattern rather than reusing previous-year papers, so questions are not repeated between attempts.",
-  "Every question includes a step-by-step explanation, and scoring applies the exam's negative marking.",
-  "Question difficulty adapts in real time to the candidate's performance during a test.",
+  "Sitting previous year papers on Questivo is free; no payment details are required.",
+  "Questivo's previous year archive covers JEE Main, JEE Advanced, NEET UG and GATE Metallurgical Engineering (MT).",
+  "A previous year paper is served exactly as it was set: every question in its original order, under the original duration and marking scheme, with nothing generated, shuffled or substituted.",
+  "For exams with no stored previous year paper, Questivo generates a fresh paper in that exam's official pattern instead.",
+  "The correct answer and the worked solution are withheld by the server until a paper is submitted, so no answer key is exposed during an attempt.",
+  "Every question carries a worked solution; previous year questions also show the solution as the original booklet printed it where that scan exists.",
+  "Scoring applies the exam's real marking scheme, including negative marking, Section B attempt limits, and bonus marks for questions that were dropped or awarded to all candidates.",
+  "Questivo can build a paper from previous year questions filtered by subject, chapter, year or difficulty, and applies those filters strictly rather than topping the paper up from elsewhere.",
+  "Some AI features are gated to a paid plan; the previous year archive is free.",
   "The ATS resume checker accepts PDF, DOC and DOCX files and returns results instantly.",
   "Questivo's interface is in English and it is aimed at candidates in India.",
-  "Per-user URLs under /tests/, /interviews/ and /admin are private and excluded from crawling.",
+  "Per-user URLs under /tests/, /interviews/, /pyq/attempt/ and /admin are private and excluded from crawling.",
 ];
 
 export function buildJsonLd() {
@@ -305,13 +438,18 @@ export function buildJsonLd() {
       url: LOGO_URL,
     },
     description:
-      "Questivo builds AI-powered mock tests, ATS resume analysis and AI mock interviews for candidates preparing for Indian competitive exams and job applications.",
+      "Questivo publishes real previous year question papers with worked solutions, generates practice papers in the official exam pattern, and provides ATS resume analysis and AI mock interviews for candidates preparing for Indian competitive exams and job applications.",
     areaServed: {
       "@type": "Country",
       name: "India",
     },
     knowsAbout: [
+      "JEE Main previous year question papers",
+      "JEE Advanced previous year question papers",
+      "NEET UG previous year question papers",
+      "GATE Metallurgical Engineering previous year question papers",
       "JEE Main preparation",
+      "JEE Advanced preparation",
       "NEET UG preparation",
       "GATE preparation",
       "SSC CGL preparation",
@@ -327,12 +465,17 @@ export function buildJsonLd() {
     name: SITE_NAME,
     url: `${SITE_URL}/`,
     publisher: { "@id": `${SITE_URL}/#organization` },
-    inLanguage: "en-IN",
+    inLanguage: SITE_LOCALE,
+    // Points at the free previous-year archive, which reads ?exam= (see
+    // PyqPapersPage). It used to target /GenerateTestPage, which is now behind
+    // PremiumRoute — a searchbox that lands the visitor on a paywall is worse
+    // than no searchbox, and Google drops the feature if the target does not
+    // resolve to real results anyway.
     potentialAction: {
       "@type": "SearchAction",
       target: {
         "@type": "EntryPoint",
-        urlTemplate: `${SITE_URL}/GenerateTestPage?exam={search_term_string}`,
+        urlTemplate: `${SITE_URL}/pyq?exam={search_term_string}`,
       },
       "query-input": "required name=search_term_string",
     },
@@ -347,21 +490,33 @@ export function buildJsonLd() {
     url: `${SITE_URL}/`,
     publisher: { "@id": `${SITE_URL}/#organization` },
     description:
-      "AI mock test generator for JEE, NEET, GATE, SSC, RRB and UPSC, with instant scoring, step-by-step explanations, an ATS resume checker and AI mock interviews.",
+      "Previous year question papers with worked solutions for JEE Main, JEE Advanced, NEET UG and GATE MT, plus generated practice papers in the official exam pattern, an ATS resume checker and AI mock interviews.",
     featureList: [
-      "AI-generated mock tests matching official exam patterns",
-      "Real-time difficulty adjustment",
-      "Step-by-step answer explanations",
-      "Instant scoring with negative marking",
+      "Real previous year papers sat under the original clock and marking scheme",
+      "Worked solution on every question, including the original booklet's own solution",
+      "Papers built from previous year questions by subject, chapter, year or difficulty",
+      "Generated practice papers matching official exam patterns",
+      "Instant scoring with negative marking, Section B limits and bonus questions",
+      "Saved attempt history that can be reopened and reviewed",
       "ATS resume score and rewrite suggestions",
       "Live AI voice mock interviews",
     ],
-    offers: {
-      "@type": "Offer",
-      price: "0",
-      priceCurrency: "INR",
-      availability: "https://schema.org/InStock",
-    },
+    // A free tier that is genuinely usable end to end — the whole previous year
+    // archive — alongside paid AI features. Both are declared rather than
+    // claiming the app is free outright, which stopped being true when
+    // entitlements shipped, or pricing it, which would understate the free tier.
+    offers: [
+      {
+        "@type": "Offer",
+        name: "Free",
+        price: "0",
+        priceCurrency: "INR",
+        availability: "https://schema.org/InStock",
+        description:
+          "Sitting previous year papers, scoring, worked solutions and the ATS resume check are free and require no payment details.",
+      },
+    ],
+    isAccessibleForFree: true,
   };
 
   const faq = {
@@ -434,6 +589,181 @@ export function buildExamJsonLd(exam: Exam) {
 /** The exam whose landing page this path is, if any. */
 export function getExamForPath(pathname: string): Exam | undefined {
   return EXAMS.find((e) => examPath(e) === pathname);
+}
+
+/**
+ * CollectionPage + ItemList for /exams.
+ *
+ * /exams is a hub whose entire job is to point at the seven exam pages, and a
+ * bare list of links does not tell a crawler that it is one. ItemList does, and
+ * it is the schema Unacademy's exam directory uses for the same reason. Each
+ * entry carries only name and url — the descriptions live on the pages
+ * themselves, and duplicating them here just invites the two to disagree.
+ */
+export function buildExamListJsonLd() {
+  return {
+    "@context": "https://schema.org",
+    "@type": "CollectionPage",
+    "@id": `${SITE_URL}/exams#collection`,
+    name: "All exams on Questivo",
+    url: `${SITE_URL}/exams`,
+    inLanguage: SITE_LOCALE,
+    isPartOf: { "@id": `${SITE_URL}/#website` },
+    about: EXAMS.map((e) => ({ "@type": "Thing", name: e.name })),
+    mainEntity: {
+      "@type": "ItemList",
+      numberOfItems: EXAMS.length,
+      itemListElement: EXAMS.map((exam, i) => ({
+        "@type": "ListItem",
+        position: i + 1,
+        name: `${exam.name} mock test`,
+        url: `${SITE_URL}${examPath(exam)}`,
+      })),
+    },
+  };
+}
+
+/**
+ * CollectionPage for /pyq.
+ *
+ * `hasPart` names the four exams the archive actually holds papers for, taken
+ * from `pyqExamCode` rather than from the full EXAMS list — advertising a
+ * previous year archive for SSC CGL when there is none would be the kind of
+ * claim a generative engine repeats to a candidate who then cannot find it.
+ */
+export function buildPyqJsonLd() {
+  const archived = EXAMS.filter((e) => e.pyqExamCode);
+  return {
+    "@context": "https://schema.org",
+    "@type": "CollectionPage",
+    "@id": `${SITE_URL}/pyq#collection`,
+    name: "Previous year question papers",
+    url: `${SITE_URL}/pyq`,
+    inLanguage: SITE_LOCALE,
+    isPartOf: { "@id": `${SITE_URL}/#website` },
+    isAccessibleForFree: true,
+    description:
+      "Real previous year question papers sat exactly as they were set, under the original duration and marking scheme, with a worked solution on every question.",
+    about: archived.map((e) => ({
+      "@type": "Thing",
+      name: `${e.name} previous year question papers`,
+    })),
+    hasPart: archived.map((e) => ({
+      "@type": "LearningResource",
+      name: `${e.name} previous year question papers`,
+      learningResourceType: "Past examination paper",
+      educationalLevel: e.category,
+      inLanguage: SITE_LOCALE,
+      isAccessibleForFree: true,
+      url: `${SITE_URL}/pyq?exam=${encodeURIComponent(e.pyqExamCode as string)}`,
+      provider: { "@id": `${SITE_URL}/#organization` },
+    })),
+  };
+}
+
+/**
+ * robots.txt, generated rather than kept as a static file in public/.
+ *
+ * It used to be static, which meant it carried a hardcoded hostname in its
+ * Sitemap: line — and that line went on pointing at the old vercel.app domain
+ * long after the site moved, sending every crawler that read it to a sitemap
+ * full of URLs on the wrong host. Building it from SITE_URL alongside
+ * sitemap.xml and llms.txt makes that class of drift impossible.
+ */
+export function buildRobotsTxt() {
+  return `# ${SITE_URL}/robots.txt
+#
+# GENERATED at build time by scripts/prerender.mjs from buildRobotsTxt() in
+# src/lib/seo.ts. Do not edit dist/robots.txt — edit that function.
+
+# ---------------------------------------------------------------------------
+# Default: everything public is crawlable.
+# ---------------------------------------------------------------------------
+User-agent: *
+Allow: /
+
+# Admin console — never fetch.
+Disallow: /admin
+Disallow: /admin/
+
+# Per-user URLs: unbounded in number, unique to one person, and they leak
+# session ids into search results. Blocked to protect crawl budget.
+Disallow: /tests/
+Disallow: /interviews/
+# One candidate's saved sitting of a paper. The archive itself (/pyq) and the
+# papers in it are deliberately NOT blocked — they are the site's main asset.
+Disallow: /pyq/attempt/
+
+# NOTE: /signin, /signup and /profile are deliberately NOT disallowed here.
+# They serve <meta name="robots" content="noindex">, and a crawler that is
+# blocked from fetching a page never sees that tag — Google can still list a
+# disallowed URL from inbound links alone. Allowing the fetch is what actually
+# keeps them out of the index.
+#
+# Query strings are likewise not blocked: rel=canonical already collapses
+# duplicates, /pyq?exam= is how the archive is filtered and linked, and a
+# blanket ?-block would break the WebSite SearchAction target and any UTM-tagged
+# campaign landing page.
+
+# ---------------------------------------------------------------------------
+# AI / answer-engine crawlers.
+#
+# These are listed explicitly so the decision is visible rather than implied by
+# the wildcard above. Questivo *wants* to be cited in AI answers, so they are
+# allowed. To opt a company out, change its Allow to Disallow.
+# ---------------------------------------------------------------------------
+
+# OpenAI — model training, ChatGPT search index, and live user fetches
+User-agent: GPTBot
+User-agent: OAI-SearchBot
+User-agent: ChatGPT-User
+Allow: /
+
+# Anthropic
+User-agent: ClaudeBot
+User-agent: Claude-User
+User-agent: Claude-SearchBot
+User-agent: anthropic-ai
+Allow: /
+
+# Perplexity
+User-agent: PerplexityBot
+User-agent: Perplexity-User
+Allow: /
+
+# Google Gemini / AI Overviews (separate from Googlebot: blocking this does not
+# affect normal Search ranking)
+User-agent: Google-Extended
+Allow: /
+
+# Apple Intelligence
+User-agent: Applebot
+User-agent: Applebot-Extended
+Allow: /
+
+# Meta AI
+User-agent: meta-externalagent
+User-agent: FacebookBot
+Allow: /
+
+# Microsoft Copilot
+User-agent: Bingbot
+Allow: /
+
+# Common Crawl — the training corpus behind many open models
+User-agent: CCBot
+Allow: /
+
+# Others
+User-agent: Amazonbot
+User-agent: DuckAssistBot
+User-agent: YouBot
+User-agent: cohere-ai
+User-agent: Diffbot
+Allow: /
+
+Sitemap: ${SITE_URL}/sitemap.xml
+`;
 }
 
 /** BreadcrumbList for a non-home route. */

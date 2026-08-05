@@ -47,12 +47,16 @@ function buildHead(route, mod) {
   const {
     SITE_URL,
     SITE_NAME,
+    SITE_LOCALE,
     TWITTER_HANDLE,
     DEFAULT_OG_IMAGE,
     buildJsonLd,
     buildBreadcrumbs,
   } = mod;
-  const canonical = `${SITE_URL}${route.path === "/" ? "/" : route.path}`;
+  // canonicalPath lets a duplicate URL (/test-setup) point at the one that
+  // should be indexed (/pyq/setup) instead of declaring itself canonical.
+  const canonicalTarget = route.canonicalPath ?? route.path;
+  const canonical = `${SITE_URL}${canonicalTarget === "/" ? "/" : canonicalTarget}`;
   const image = route.ogImage ?? DEFAULT_OG_IMAGE;
   const robots = route.noindex
     ? "noindex, nofollow"
@@ -63,6 +67,12 @@ function buildHead(route, mod) {
     `<meta name="description" content="${escapeHtml(route.description)}" />`,
     `<meta name="keywords" content="${escapeHtml(route.keywords)}" />`,
     `<link rel="canonical" href="${canonical}" />`,
+    // One locale, stated rather than inferred. x-default points at the same URL
+    // because there is no other language version to fall back to — omitting it
+    // makes the annotation incomplete, and inventing an "en" alternate that
+    // does not exist would be worse.
+    `<link rel="alternate" hreflang="${SITE_LOCALE}" href="${canonical}" />`,
+    `<link rel="alternate" hreflang="x-default" href="${canonical}" />`,
     `<meta name="robots" content="${robots}" />`,
     `<meta property="og:type" content="website" />`,
     `<meta property="og:site_name" content="${escapeHtml(SITE_NAME)}" />`,
@@ -113,6 +123,23 @@ function buildHead(route, mod) {
     tags.push(
       `<script type="application/ld+json" id="exam-jsonld">${escapeJsonLd(
         mod.buildExamJsonLd(exam)
+      )}</script>`
+    );
+  }
+
+  // The two hub pages describe themselves as collections of the things they
+  // link to, which a flat list of <a> elements does not communicate.
+  if (route.path === "/exams") {
+    tags.push(
+      `<script type="application/ld+json" id="collection-jsonld">${escapeJsonLd(
+        mod.buildExamListJsonLd()
+      )}</script>`
+    );
+  }
+  if (route.path === "/pyq") {
+    tags.push(
+      `<script type="application/ld+json" id="collection-jsonld">${escapeJsonLd(
+        mod.buildPyqJsonLd()
       )}</script>`
     );
   }
@@ -198,6 +225,7 @@ async function main() {
   await generate404(mod, template);
   await generateSitemap(mod);
   await generateLlmsTxt(mod);
+  await generateRobotsTxt(mod);
 
   // The SSR bundle is a build artefact; leaving it in place confuses deploys.
   await rm(path.join(root, "dist-ssr"), { recursive: true, force: true });
@@ -256,7 +284,7 @@ async function generate404(mod, template) {
 
   const head = [
     `<title>Page not found | Questivo</title>`,
-    `<meta name="description" content="This page doesn't exist. Browse Questivo's free AI mock tests by exam instead." />`,
+    `<meta name="description" content="This page doesn't exist. Browse Questivo's free previous year papers and mock tests by exam instead." />`,
     `<meta name="robots" content="noindex, follow" />`,
   ].join("\n    ");
 
@@ -265,7 +293,9 @@ async function generate404(mod, template) {
     .replace("<!--app-html-->", appHtml)
     .replace(
       "<!--seo-noscript-->",
-      "<noscript><h2>Page not found</h2><p>This page doesn't exist. Visit questivo.vercel.app to browse free AI mock tests by exam.</p></noscript>"
+      // Built from SITE_URL rather than naming a host inline: this string spent
+      // the last deploy telling visitors to go to questivo.vercel.app.
+      `<noscript><h2>Page not found</h2><p>This page doesn't exist. Visit <a href="${mod.SITE_URL}/exams">${mod.SITE_URL}/exams</a> to browse free previous year papers and mock tests by exam.</p></noscript>`
     );
 
   await writeFile(path.join(distDir, "404.html"), html, "utf-8");
@@ -322,6 +352,20 @@ ${LLMS_FACTS.map((f) => `- ${f}`).join("\n")}
   console.log(
     `  + llms.txt             -> ${INDEXABLE_ROUTES.length} pages, ${EXAMS.length} exams`
   );
+}
+
+/**
+ * Generate /robots.txt.
+ *
+ * Generated, not shipped from public/, so its Sitemap: line cannot name a
+ * hostname the site no longer lives on — which is precisely what the static
+ * version did after the move to the custom domain. Overwrites whatever Vite
+ * copied out of public/, so a leftover file there loses to this one rather than
+ * silently winning.
+ */
+async function generateRobotsTxt(mod) {
+  await writeFile(path.join(distDir, "robots.txt"), mod.buildRobotsTxt(), "utf-8");
+  console.log(`  + robots.txt           -> sitemap at ${mod.SITE_URL}/sitemap.xml`);
 }
 
 main().catch((err) => {

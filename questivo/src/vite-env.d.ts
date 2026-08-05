@@ -8,10 +8,25 @@ interface ImportMetaEnv {
    * /api/* to the Render backend, so the API is same-origin with the site and
    * the session cookie stays first-party — browsers block it as a third-party
    * cookie otherwise, which made login appear to fail.
-   *   prod: https://questivo.vercel.app
+   *   prod: https://questivo.sutradharlabs.me
    *   dev:  http://localhost:5173   (vite.config.ts proxies /api)
+   *
+   * NOTE: production is currently set to https://questivo.onrender.com — the
+   * backend directly, not the site's own origin. That defeats the reasoning
+   * above: the session cookie is then third-party and depends on the browser
+   * still allowing those.
    */
   readonly VITE_API_URL: string
+
+  /**
+   * The canonical public origin, e.g. https://questivo.sutradharlabs.me.
+   *
+   * Feeds SITE_URL in lib/seo.ts, and through it every canonical, og:url,
+   * sitemap entry, llms.txt link, JSON-LD @id and robots.txt Sitemap line.
+   * Optional: omitted, seo.ts falls back to the production domain. Set it only
+   * to move domains — and update the redirect in vercel.json in the same change.
+   */
+  readonly VITE_SITE_URL?: string
 
   /**
    * Backend origin for websockets, dialed DIRECTLY.

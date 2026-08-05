@@ -19,16 +19,46 @@ client-rendered SPA is effectively invisible to them.
 
 ## How it works
 
+### 0. The domain
+
+`SITE_URL` in `src/lib/seo.ts` is the one hostname Questivo claims. It is
+stamped into every canonical, `og:url`, sitemap entry, `llms.txt` link, JSON-LD
+`@id` and the generated `robots.txt`.
+
+It is read from `VITE_SITE_URL`, defaulting to `https://questivo.sutradharlabs.me`.
+
+This is not cosmetic, and it has already gone wrong once. The value read
+`https://questivo.vercel.app` while the site was live on the custom domain, so
+every page served from `questivo.sutradharlabs.me` carried
+`<link rel="canonical" href="https://questivo.vercel.app/">` — each page telling
+Google the real version of itself lived on another host. `questivo.vercel.app`
+answered 200 for the whole site at the same time, so there were two complete,
+crawlable copies and the branded domain was donating its ranking signal to the
+deployment URL.
+
+Two things keep that fixed, and they must stay in agreement:
+
+1. `SITE_URL` (or `VITE_SITE_URL`) names the domain to keep.
+2. `vercel.json` **redirects** every other host to it with a 308. The `has:
+   host` value must be the host being redirected *away from* — point it at the
+   host it redirects *to* and the site redirects to itself forever.
+
+If you add another domain to the Vercel project, add a redirect for it too.
+
 ### 1. Single source of truth: `src/lib/seo.ts`
 
 Route titles, descriptions, keywords, FAQ entries and all JSON-LD live here.
 Nothing else hard-codes this copy.
 
 ```
-ROUTES[]           per-route <head> content + crawler-visible facts
-FAQS[]             feeds BOTH the FAQPage JSON-LD and the on-page FAQ section
-buildJsonLd()      Organization + WebSite + SoftwareApplication + FAQPage graph
-buildBreadcrumbs() BreadcrumbList for non-home routes
+ROUTES[]              per-route <head> content + crawler-visible facts
+FAQS[]                feeds BOTH the FAQPage JSON-LD and the on-page FAQ section
+LLMS_FACTS[]          quotable claims for answer engines — held to a factual bar
+buildJsonLd()         Organization + WebSite + SoftwareApplication + FAQPage graph
+buildBreadcrumbs()    BreadcrumbList for non-home routes
+buildExamListJsonLd() CollectionPage + ItemList for the /exams hub
+buildPyqJsonLd()      CollectionPage + LearningResource for the /pyq archive
+buildRobotsTxt()      robots.txt, so its Sitemap: line cannot name a stale host
 ```
 
 ### 1b. Per-exam landing pages: `src/lib/exams.ts`
@@ -90,13 +120,27 @@ initial payload  1,146 kB  ->  582 kB   (-49%)
 ```
 
 `App.tsx` lazy-loads every route that is **not** prerendered. The split rule is
-"prerendered vs not", not "big vs small": a lazy route would render a Suspense
-fallback during hydration and throw the prerendered HTML away.
+"prerendered vs not", not "big vs small": a lazy route renders its Suspense
+fallback under `renderToString`, so the prerender step writes out the *spinner*
+instead of the page, and hydration then throws that HTML away.
 
-- **Eager** (prerendered, must hydrate): `/`, `/GenerateTestPage`,
-  `/resume_ats_score`, `/mock-test/*`, plus Header/Seo/404.
-- **Lazy**: test runner and result (pull in katex + react-markdown, ~332 kB),
-  auth, profile, live interview (socket.io), the whole admin console.
+This bit once already. `/pyq` was promoted from noindex to indexable while
+`PyqPapersPage` was still lazy, and the resulting `dist/pyq/index.html` had
+`Loading…` where its content should be — an indexable page worth nothing to
+exactly the non-JS AI crawlers this whole step exists for. Making it eager cost
+7 kB of initial payload (582 → 589 kB).
+
+> **Indexable implies prerendered implies eager.** If you flip a route's
+> `noindex` off, check its import in `App.tsx` in the same change.
+
+- **Eager** (prerendered with a body, must hydrate): `/`, `/GenerateTestPage`,
+  `/exams`, `/resume_ats_score`, `/pyq`, `/mock-test/*`, plus Header/Seo/404.
+- **Lazy**: the PYQ paper player and attempt review, the setup flow, test runner
+  and result (pull in katex + react-markdown, ~332 kB), auth, profile, live
+  interview (socket.io), the whole admin console.
+
+`noindex` routes may stay lazy: the prerender step writes their `<head>` but
+never renders a body for them, so there is nothing to discard.
 
 `vite.config.ts` peels React into its own chunk for cross-deploy caching. It
 deliberately returns `undefined` for everything else — an earlier version
@@ -116,6 +160,21 @@ every dead URL with 200 + app shell, which Google classifies as a soft 404.
 > `ROUTES`) or add a rewrite for it in `vercel.json`.** Otherwise a direct visit
 > or refresh on that URL returns a real 404. This is the one trade-off of
 > narrowing the rewrites.
+
+This was not hypothetical. `/pyq/setup`, `/test-setup` and `/my-reports` shipped
+without either, and every one of them returned a hard 404 in production on
+direct visit or refresh — a bookmark or a shared link to the setup flow was
+simply broken. They are in `ROUTES` now (as `noindex`, which still writes a real
+file so the URL answers 200), and `/pyq/:path*` has a rewrite for the dynamic
+children `/pyq/:paperId` and `/pyq/attempt/:id`.
+
+Order matters and works in our favour: Vercel checks the filesystem *before*
+rewrites, so `/pyq/setup` hits its prerendered file and only unmatched children
+fall through to the rewrite.
+
+Two URLs rendering the same component (`/test-setup` and `/pyq/setup`) is
+duplicate content. `canonicalPath` on a `RouteSeo` entry points the duplicate at
+the one to index; `noindex` alone does not merge them.
 
 ### 7. Design system
 
@@ -177,25 +236,54 @@ six shapes are asserted distinct in `src/test/sectionPlan.test.mjs`.
 
 ## AI crawler policy
 
-`public/robots.txt` names each AI crawler explicitly and allows it, so the
-decision is visible rather than implied. To opt out of a specific company,
-change its `Allow: /` to `Disallow: /`. Note that `Google-Extended` controls
-Gemini/AI Overviews only — blocking it does not affect normal Search ranking.
+`robots.txt` names each AI crawler explicitly and allows it, so the decision is
+visible rather than implied. To opt out of a specific company, change its
+`Allow: /` to `Disallow: /`. Note that `Google-Extended` controls Gemini/AI
+Overviews only — blocking it does not affect normal Search ranking.
 
-`public/llms.txt` is a plain-text brief for answer engines: what Questivo is,
-which exams it covers, and a set of self-contained facts safe to quote.
+**It is generated, not a file in `public/`.** Edit `buildRobotsTxt()` in
+`src/lib/seo.ts`. It used to be static, which meant a hardcoded hostname in its
+`Sitemap:` line, and that line went on pointing every crawler at the old
+vercel.app sitemap long after the move. Building it from `SITE_URL` alongside
+`sitemap.xml` and `llms.txt` makes that drift impossible.
+
+`llms.txt` is a plain-text brief for answer engines: what Questivo is, which
+exams it covers, and a set of self-contained facts safe to quote.
+
+`LLMS_FACTS` and `FAQS` are held to a higher bar than marketing copy. A
+generative engine repeats them to a candidate as fact, with Questivo's name on
+them and no way for the reader to check. One of them — "Questivo generates new
+questions rather than reusing previous-year papers" — was true when written and
+became false the day the PYQ archive shipped, and it sat there contradicting the
+site's own homepage. **A claim in those two arrays that stops being true is a
+bug, not stale copy.**
 
 ## Verifying a deploy
 
 ```bash
-curl -s https://questivo.vercel.app/ | grep -c "Questivo is a free AI-powered"
-curl -s https://questivo.vercel.app/resume_ats_score | grep -o "<title>.*</title>"
-curl -s https://questivo.vercel.app/robots.txt
-curl -s https://questivo.vercel.app/sitemap.xml
+curl -s https://questivo.sutradharlabs.me/ | grep -c "Previous year papers"
 ```
 
-The first should return `1` or more — if it returns `0`, the prerender step did
-not run and the site is back to shipping an empty shell.
+Should return `1` or more. `0` means the prerender step did not run and the site
+is back to shipping an empty shell — check that the build ran `npm run build`
+and not just `vite build`.
+
+```bash
+curl -s https://questivo.sutradharlabs.me/pyq | grep -o "<title>.*</title>"
+```
+
+```bash
+curl -sI https://questivo.vercel.app/ | grep -iE "^(HTTP|location)"
+```
+
+Should be `308` to `questivo.sutradharlabs.me`. A `200` means the duplicate copy
+of the site is live again.
+
+```bash
+curl -s https://questivo.sutradharlabs.me/sitemap.xml | grep -c vercel.app
+```
+
+Must be `0`. Anything else means `SITE_URL` regressed.
 
 ## Competitor benchmark
 
@@ -243,15 +331,27 @@ What this implies, and what was adopted:
   give it a real landing page that renders for visitors, then drop the
   `noindex` flag in `src/lib/seo.ts`.
 - **No privacy policy or terms pages.** The footer links to them were removed
-  because the routes do not exist. Google AdSense (already embedded on the site)
-  requires a privacy policy.
-- **`SITE_URL` is `questivo.vercel.app`.** Move to a custom domain before
-  investing further in link building; changing domains later resets accumulated
-  authority.
+  because the routes do not exist. This is the most pressing gap on the list:
+  Google AdSense is already embedded on the site and requires a privacy policy,
+  and the app now takes email addresses, Google OAuth sign-in and uploaded
+  resumes — so the policy has real content to describe. It was not written here
+  because it is a legal commitment about data handling, not copy to be inferred
+  from the codebase.
 - **Exam pages are ~800 words; Testbook's equivalent is 8,776.** Closing that
   gap honestly means adding verified exam data (pattern, eligibility, important
   dates, previous-year analysis) via `officialFacts` — which needs someone who
   will keep it current each cycle. Do not close it by padding.
-- **Only 6 exams have pages**, though the app advertises 50+ categories. Each
+- **7 exams have pages**, though the app advertises 50+ categories. Each
   additional entry in `EXAMS` is a new indexable page; this is the cheapest
   remaining growth lever.
+- **`/pyq` is one page for the whole archive.** It is indexable and carries
+  `CollectionPage` + `LearningResource` schema, but the archive underneath it is
+  a live query, so a crawler gets the heading and the `facts` block and nothing
+  per-paper. The real prize is a page per exam-year — "JEE Advanced 2019 Paper 1
+  with solutions" is a query with volume that Questivo can answer from data it
+  already holds. That needs a route like `/pyq/<exam>/<year>` prerendered from
+  the API at build time, which is a bigger change than this pass: the prerender
+  step currently reads only static tables and would need to fetch.
+- **`officialFacts` is still empty for every exam**, so no exam page states a
+  marking scheme or pattern. Deliberate — see the accuracy policy — but it is
+  the ceiling on how well those pages can rank.

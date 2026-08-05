@@ -31,16 +31,23 @@ import GenerateTestPage from "./componenets/selectpage";
 import ResumeATSPage from "./pages/Resume_score";
 import ExamLandingPage from "./pages/ExamLandingPage";
 import ExamsIndexPage from "./pages/ExamsIndexPage";
+// Eager because /pyq is prerendered and indexable. It was lazy while the
+// archive was an unpromoted screen, and when /pyq was promoted the prerender
+// dutifully wrote out... the Suspense spinner, because a lazy component renders
+// its fallback under renderToString. An indexable page whose HTML says
+// "Loading…" is worth nothing to exactly the AI crawlers this whole prerender
+// step exists for. See the split rule above: prerendered implies eager.
+import PyqPapersPage from "./pages/PyqPapersPage";
 import NotFoundPage from "./pages/NotFoundPage";
 
 // --- Lazy: never prerendered, and these carry the heavy dependencies ---
 // katex + react-markdown (~250 kB) live behind the test runner and result pages.
 const TestRunner = lazy(() => import("./componenets/TestPage"));
 const ResultPage = lazy(() => import("./componenets/result"));
-// Previous year papers: the picker, and the NTA-style player that runs one.
-// Never prerendered — the picker's content is a live query and the player is
-// only ever reached by a signed-in candidate choosing a paper.
-const PyqPapersPage = lazy(() => import("./pages/PyqPapersPage"));
+// Previous year papers. The picker itself is eager and prerendered (imported
+// above); these two are not. The setup flow is noindex, so the prerender step
+// writes its <head> but never renders its body — nothing to throw away — and
+// the player is only ever reached by a candidate who has chosen a paper.
 const ExamSetupPage = lazy(() => import("./pages/ExamSetupPage"));
 const PyqPaperRunner = lazy(() => import("./pages/PyqPaperRunner"));
 // Reopening a saved sitting. Shares the result view with the player above, so
