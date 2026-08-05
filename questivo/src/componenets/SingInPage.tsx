@@ -1,10 +1,6 @@
 import { useState } from "react";
 
-const API_BASE =
-   (typeof import.meta !== "undefined" && (import.meta as any).env?.VITE_API_URL) ||
-  (typeof process !== "undefined" && (process.env as any).NEXT_PUBLIC_API_URL) ||
-  (typeof process !== "undefined" && (process.env as any).REACT_APP_API_URL) ||
-  "http://localhost:4000";
+import { API_BASE } from "../lib/apiBase";
 
 type Mode = "PASSWORD" | "OTP" | "OTP_VERIFY";
 

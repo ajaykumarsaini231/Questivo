@@ -6,9 +6,7 @@
  * Everything here has to stay small.
  */
 
-const API_BASE =
-  (typeof import.meta !== "undefined" && (import.meta as any).env?.VITE_API_URL) ||
-  "http://localhost:4000";
+import { API_BASE } from "./apiBase";
 
 /** Exams that have a PYQ shelf, keyed by their landing-page slug. */
 export const PYQ_SLUGS: Record<string, string> = {

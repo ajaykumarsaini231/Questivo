@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { FAQS } from '../lib/seo';
 import { examPath } from '../lib/exams';
+import { API_BASE } from '../lib/apiBase';
 import { 
   BookOpen, 
   CheckCircle, 
@@ -58,9 +59,6 @@ const HomePage: React.FC = () => {
   // The visitor's track. Until it has been read this returns every exam and
   // allows every feature, which is what the prerendered homepage contains.
   const { visibleExams, allExams, can, audience, focusExam, lockedToTrack } = useAudience();
-
- const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:4000';
-
 
   const api = axios.create({
     baseURL: API_BASE,

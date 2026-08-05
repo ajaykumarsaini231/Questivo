@@ -3,6 +3,7 @@ import { useParams, Link } from "react-router-dom";
 import { CheckCircle, XCircle, AlertCircle, ArrowLeft, BarChart3, HelpCircle, BookOpen } from "lucide-react";
 import Header from "./Header";
 import SafeMathRenderer from "./SafeMathRenderer"; // ✅ Imported Safe Math presentation bridge cleanly
+import { API_BASE as RUNTIME_API } from "../lib/apiBase";
 // --- Types ---
 type BreakdownItem = {
   questionId: string;
@@ -30,13 +31,6 @@ export default function ResultPage() {
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<ApiResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  // --- API Configuration (No external helper) ---
-  const RUNTIME_API =
-    (typeof import.meta !== "undefined" && (import.meta as any).env?.VITE_API_URL) ||
-    (typeof process !== "undefined" && (process.env as any).NEXT_PUBLIC_API_URL) ||
-    (typeof process !== "undefined" && (process.env as any).REACT_APP_API_URL) ||
-    "http://localhost:4000";
 
   const API_BASE = `${RUNTIME_API.replace(/\/$/, "")}/api`;
   const RESULT_API = `${API_BASE}/tests/${encodeURIComponent(sessionId || "")}/result`;

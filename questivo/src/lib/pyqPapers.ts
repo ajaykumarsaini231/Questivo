@@ -11,9 +11,7 @@
  * be a round trip — see `scorePyqPaper`.
  */
 
-const API_BASE =
-  (typeof import.meta !== "undefined" && (import.meta as any).env?.VITE_API_URL) ||
-  "http://localhost:4000";
+import { API_BASE } from "./apiBase";
 
 export interface PyqPaperSummary {
   paperId: string;

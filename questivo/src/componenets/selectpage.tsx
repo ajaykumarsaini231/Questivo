@@ -52,7 +52,7 @@ type ServerGenerateResponse = {
 type Message = { type: "error" | "success"; text: string } | null;
 
 // --- CONFIG ---
-const API= import.meta.env.VITE_API_URL || 'http://localhost:4000';
+import { API_BASE as API } from '../lib/apiBase';
 
 
 const CATEGORY_BASE = `${API}/api/category`;

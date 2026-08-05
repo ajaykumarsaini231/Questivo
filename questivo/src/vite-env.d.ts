@@ -2,21 +2,24 @@
 
 interface ImportMetaEnv {
   /**
-   * Origin the REST API is called on.
+   * Origin the REST API is called on. LEAVE EMPTY.
    *
-   * Set to the FRONTEND's own origin, not the backend's. vercel.json rewrites
-   * /api/* to the Render backend, so the API is same-origin with the site and
-   * the session cookie stays first-party — browsers block it as a third-party
-   * cookie otherwise, which made login appear to fail.
-   *   prod: https://questivo.sutradharlabs.me
-   *   dev:  http://localhost:5173   (vite.config.ts proxies /api)
+   * Empty means same-origin: the call goes to whichever host served the page,
+   * and vercel.json rewrites /api/* on from there to the Render backend, so the
+   * session cookie is set by that host and is first-party to it.
    *
-   * NOTE: production is currently set to https://questivo.onrender.com — the
-   * backend directly, not the site's own origin. That defeats the reasoning
-   * above: the session cookie is then third-party and depends on the browser
-   * still allowing those.
+   * It has to be empty rather than a hostname because one build answers on more
+   * than one: questivo.sutradharlabs.me and questivo.vercel.app both serve it.
+   * Any absolute origin written here is first-party on at most one of them and a
+   * third-party cookie on the rest — which is login working on one hostname and
+   * silently not sticking on the other.
+   *   prod: (empty)
+   *   dev:  (unset) — vite.config.ts proxies /api to VITE_DEV_API_TARGET
+   *
+   * Read only by lib/apiBase.ts. Read it anywhere else with `||` and the empty
+   * value reads as absent and collapses to localhost.
    */
-  readonly VITE_API_URL: string
+  readonly VITE_API_URL?: string
 
   /**
    * The canonical public origin, e.g. https://questivo.sutradharlabs.me.
@@ -24,7 +27,8 @@ interface ImportMetaEnv {
    * Feeds SITE_URL in lib/seo.ts, and through it every canonical, og:url,
    * sitemap entry, llms.txt link, JSON-LD @id and robots.txt Sitemap line.
    * Optional: omitted, seo.ts falls back to the production domain. Set it only
-   * to move domains — and update the redirect in vercel.json in the same change.
+   * to move domains. It names the ONE host that should be indexed; the others
+   * still serve the site, and their pages point here with rel=canonical.
    */
   readonly VITE_SITE_URL?: string
 

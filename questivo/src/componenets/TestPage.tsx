@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";//  Safe LaTeX presentation bridge imported cleanly
 import SafeMathRenderer from "./SafeMathRenderer";
+import { API_BASE as ENV_API } from "../lib/apiBase";
 type OptionLetter = "A" | "B" | "C" | "D";
 
 type Question = {
@@ -67,14 +68,10 @@ export default function TestRunner({
   durationMinutes = 60,
   apiBase,
 }: TestRunnerProps) {
-  const RUNTIME_API =
-    apiBase ||
-    (typeof import.meta !== "undefined" && (import.meta as any).env?.VITE_API_URL) ||
-    (typeof process !== "undefined" && (process.env as any).NEXT_PUBLIC_API_URL) ||
-    (typeof process !== "undefined" && (process.env as any).REACT_APP_API_URL) ||
-    "http://localhost:4000";
+  // ?? not ||, so a caller passing "" gets the same-origin base it asked for
+  // rather than being quietly overridden by the environment's.
+  const RUNTIME_API = apiBase ?? ENV_API;
 
-  console.log(RUNTIME_API);
   const API_BASE = `${RUNTIME_API.replace(/\/$/, "")}/api`;
 
   const sessionId = useMemo(() => {

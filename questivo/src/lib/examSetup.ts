@@ -14,9 +14,7 @@
  * candidate never picks a combination that turns out to be empty.
  */
 
-const API_BASE =
-  (typeof import.meta !== "undefined" && (import.meta as any).env?.VITE_API_URL) ||
-  "http://localhost:4000";
+import { API_BASE } from "./apiBase";
 
 export interface ExamOption {
   examCode: string;

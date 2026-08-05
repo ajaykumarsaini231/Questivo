@@ -18,9 +18,7 @@
  * question ownership, not the flow — see the PyqAttempt model's own note.
  */
 
-const API_BASE =
-  (typeof import.meta !== "undefined" && (import.meta as any).env?.VITE_API_URL) ||
-  "http://localhost:4000";
+import { API_BASE } from "./apiBase";
 
 export type AttemptKind = "pyq" | "generated";
 export type HistoryCategory = AttemptKind | "mock";

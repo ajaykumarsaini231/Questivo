@@ -18,7 +18,7 @@ import { FileText, Mic, ArrowLeft, Printer, Loader2 } from "lucide-react";
  * "Save as PDF" is built into every browser's print dialog.
  */
 
-const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:4000";
+import { API_BASE } from "../lib/apiBase";
 const api = axios.create({ baseURL: API_BASE, withCredentials: true });
 
 type ResumeRow = {

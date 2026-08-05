@@ -10,7 +10,7 @@ import axios from 'axios';
 import { toast } from 'react-hot-toast';
 
 // --- Global Environment Setup Map ---
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000';
+import { API_BASE as API_BASE_URL } from '../lib/apiBase';
 
 // --- Core Interfaces Definitions ---
 interface FileState {

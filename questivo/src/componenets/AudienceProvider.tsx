@@ -27,9 +27,7 @@ import { EXAMS, getExam, type Exam } from "../lib/exams";
  * provider wraps every route including the prerendered ones, so it is eager in
  * the bundle and has to stay small.
  */
-const API_BASE =
-  (typeof import.meta !== "undefined" && (import.meta as any).env?.VITE_API_URL) ||
-  "http://localhost:4000";
+import { API_BASE } from "../lib/apiBase";
 
 interface AudienceValue {
   /** False until localStorage and the auth check have both been read. */

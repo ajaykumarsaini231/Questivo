@@ -25,7 +25,7 @@ type EngineState = 'IDLE' | 'LISTENING' | 'PARTIAL_TRANSCRIBING' | 'FINAL_TRANSC
 const INITIAL_ROLES = ['Software Engineer Intern', 'Backend Developer', 'Frontend Developer', 'ML Engineer', 'Data Scientist', 'Full Stack Developer', 'Product Manager'];
 const EXPERIENCE_LEVELS = ['Student', 'Intern', 'Fresher', '1–3 Years', '3–5 Years', 'Senior'];
 
-const API = import.meta.env.VITE_API_URL || 'http://localhost:4000';
+import { API_BASE as API } from '../lib/apiBase';
 
 /**
  * WebSockets cannot go through the Vercel /api rewrite — a serverless edge
