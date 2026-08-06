@@ -1,7 +1,6 @@
 import { useState, useEffect } from "react";
 import type { ChangeEvent, FormEvent } from "react";
 
-import axios from "axios";
 import toast, { Toaster } from "react-hot-toast";
 import { useLocation, useNavigate } from "react-router-dom";
 import { FcGoogle } from "react-icons/fc";
@@ -36,12 +35,9 @@ interface ApiResponse {
 }
 
 /* ================= CONFIG ================= */
-import { API_BASE } from "../lib/apiBase";
+import { createApiClient } from "../lib/api";
 
-const api = axios.create({
-  baseURL: API_BASE,
-  withCredentials: true,
-});
+const api = createApiClient();
 
 /* ================= COMPONENT ================= */
 

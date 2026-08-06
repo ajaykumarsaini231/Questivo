@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import axios from "axios";
 import { FileText, Mic, ArrowLeft, Printer, Loader2 } from "lucide-react";
 
 /**
@@ -18,8 +17,8 @@ import { FileText, Mic, ArrowLeft, Printer, Loader2 } from "lucide-react";
  * "Save as PDF" is built into every browser's print dialog.
  */
 
-import { API_BASE } from "../lib/apiBase";
-const api = axios.create({ baseURL: API_BASE, withCredentials: true });
+import { createApiClient } from "../lib/api";
+const api = createApiClient();
 
 type ResumeRow = {
   id: string;

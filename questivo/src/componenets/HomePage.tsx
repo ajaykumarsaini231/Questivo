@@ -16,6 +16,11 @@ import {
 import axios from "axios";
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAudience } from './AudienceProvider';
+import { createApiClient } from '../lib/api';
+
+// Module scope, not inside the component: it was rebuilt on every render, and
+// each rebuild now costs a fresh pair of session interceptors.
+const api = createApiClient();
 
 // --- Types ---
 interface User {
@@ -59,11 +64,6 @@ const HomePage: React.FC = () => {
   // The visitor's track. Until it has been read this returns every exam and
   // allows every feature, which is what the prerendered homepage contains.
   const { visibleExams, allExams, can, audience, focusExam, lockedToTrack } = useAudience();
-
-  const api = axios.create({
-    baseURL: API_BASE,
-    withCredentials: true, 
-  });
 
   // --- 1. Auth & Typing Effect ---
   useEffect(() => {

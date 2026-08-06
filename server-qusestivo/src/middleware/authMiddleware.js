@@ -1,8 +1,11 @@
 import jwt from "jsonwebtoken";
 import { AppError } from "../utills/errorHandler.js";
+import { readSessionToken } from "../lib/sessionToken.js";
 
 export const protect = (req, res, next) => {
-  const token = req.cookies?.token;
+  // Cookie, then Authorization header — see readSessionToken for why there are
+  // two carriers and why the cookie is tried first.
+  const token = readSessionToken(req);
   // The session JWT is a bearer credential: anyone who reads it is that user
   // until it expires. Printing it put a working credential for every logged-in
   // request into the hosting provider's log stream, where it is retained,

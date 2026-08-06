@@ -1,7 +1,8 @@
 import jwt from "jsonwebtoken";
+import { readSessionToken } from "../lib/sessionToken.js";
 
 /**
- * Resolve the signed-in user when a session cookie is present, without
+ * Resolve the signed-in user when a session credential is present, without
  * rejecting the request when it is not.
  *
  * `protect` throws a 401 on a missing cookie, which is right for private
@@ -11,16 +12,17 @@ import jwt from "jsonwebtoken";
  * belonged to the same fake user: per-user history was impossible, and the
  * history endpoint returned everybody's analyses to everybody.
  *
- * Sets req.userId when a valid cookie exists, leaves it undefined otherwise.
+ * Sets req.userId when a valid session token exists, leaves it undefined
+ * otherwise.
  */
 export const optionalAuth = (req, _res, next) => {
-  const token = req.cookies?.token;
+  const token = readSessionToken(req);
   if (!token) return next();
   try {
     const decoded = jwt.verify(token, process.env.Secret_Token);
     req.userId = decoded.userId;
   } catch {
-    // An expired or tampered cookie is treated as "not signed in" rather than
+    // An expired or tampered token is treated as "not signed in" rather than
     // an error: these routes are public.
   }
   next();

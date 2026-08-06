@@ -1,19 +1,14 @@
 // middleware/adminMiddleware.js
 import jwt from "jsonwebtoken";
 import prisma from "../prismaClient.js";
+import { readSessionToken } from "../lib/sessionToken.js";
 
 export const adminIdentifier = async (req, res, next) => {
   try {
-    let token;
-
-    // 1️⃣ PRIORITIZE COOKIE (Name: "token")
-    if (req.cookies && req.cookies.token) {
-      token = req.cookies.token;
-    } 
-    // 2️⃣ Fallback to Header (just in case)
-    else if (req.headers.authorization?.startsWith("Bearer ")) {
-      token = req.headers.authorization.split(" ")[1];
-    }
+    // 1️⃣ Cookie, then Authorization header — the same order, and the same
+    // reading, that every other authenticated route uses. This was the one
+    // place that already read both; sessionToken.js is now that logic, shared.
+    const token = readSessionToken(req);
 
     // 3️⃣ No token found
     if (!token) {

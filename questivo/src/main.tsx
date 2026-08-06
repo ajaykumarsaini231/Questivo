@@ -4,6 +4,12 @@ import ReactDOM from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
 import { GoogleOAuthProvider } from '@react-oauth/google';
+import { installAuthTransport } from './lib/authTransport';
+
+// Before the first render, so the /api/auth/me that every page fires on mount
+// already carries the session. See lib/session.ts for why a header is needed
+// alongside the cookie.
+installAuthTransport();
 
 // --- LOAD CLIENT ID FROM ENV ---
 const GOOGLE_CLIENT_ID =

@@ -5,7 +5,14 @@ import {
   LogOut, UserCog, Menu, X, ChevronRight
 } from 'lucide-react';
 import { Toaster, toast } from 'react-hot-toast';
-import { api } from '../lib/api'; // Your configured Axios instance
+import { createApiClient } from '../lib/api'; // Your configured Axios instance
+import { clearSessionToken } from '../lib/session';
+
+// `api` is based at /api/admin, and there is no admin logout route there — the
+// session endpoints all live under /api/auth. The post below was 404ing into
+// its own catch, so the cookie was never actually cleared and "logged out"
+// left a working session behind on any host where the cookie survives.
+const authApi = createApiClient();
 
 // --- Sidebar Item Component (Elegant Style) ---
 const SidebarItem = ({ 
@@ -57,20 +64,15 @@ export const AdminLayout: React.FC = () => {
     const loadingToast = toast.loading("Logging out...");
     
     try {
-      // Trying to hit the specific auth logout endpoint
-      // NOTE: If your 'api' has baseURL set to '/api/admin', 
-      // you might need to use a relative path like '../../auth/logout' 
-      // or just ensure your backend has an admin logout route.
-      await api.post("/logout"); // Ideally pointing to /api/admin/logout or /api/auth/logout
-      
+      await authApi.post("/api/auth/logout");
     } catch (err) {
       console.warn("Logout API failed, continuing cleanup");
     }
 
     // Cleanup Local State
     localStorage.removeItem("user");
-    localStorage.removeItem("token");
-    
+    clearSessionToken();
+
     // If you have a global context (setUser), you would call it here too.
     // e.g., setUser(null);
 

@@ -10,6 +10,7 @@ import {
 import { doHash, dohashValidation, hmacProcess } from "../utills/hashing.js";
 import { transport } from "../middleware/sendmail.js";
 import { guardOtpSend, OTP_PURPOSES } from "../lib/otpThrottle.js";
+import { readSessionToken } from "../lib/sessionToken.js";
 
 /**
  * Strip secrets before a user row crosses the network.
@@ -45,6 +46,37 @@ const COOKIE_OPTS = {
   sameSite: "None",      // MUST (cross-site)
   path: "/",
   maxAge: 7 * 24 * 60 * 60 * 1000,
+};
+
+/**
+ * End every successful sign-in the same way: set the cookie, and also hand the
+ * token back in the body.
+ *
+ * The cookie alone was not enough. When the page and the API are different
+ * sites — which they are on at least one of this site's hostnames whenever the
+ * frontend is built against an absolute API origin — the cookie is
+ * third-party, and a browser that blocks those discards it without telling
+ * anyone. The response still said `success: true`, so the UI navigated to a
+ * signed-in view, and the first request behind it came back 401. That is the
+ * whole of the "login works on one domain and not the other" report.
+ *
+ * Returning the token lets the client keep it and present it as
+ * `Authorization: Bearer`, which no cookie policy can drop. The cookie is
+ * still set and still preferred by readSessionToken, so the httpOnly path
+ * remains the one in use wherever it survives; the body copy is what the other
+ * hostname falls back to.
+ *
+ * The tradeoff is deliberate and worth naming: a token the page can read is a
+ * token an XSS can read, which is exactly what httpOnly buys. Being unable to
+ * log in at all is the worse failure, and this keeps the safer carrier first.
+ *
+ * All four sign-in paths — password, signup OTP, login OTP, Google — go
+ * through here so none of them can be the one that forgets.
+ */
+const grantSession = (res, user) => {
+  const token = signJwt({ userId: user.id });
+  res.cookie("token", token, COOKIE_OPTS);
+  return res.json({ success: true, token, user: publicUser(user) });
 };
 
 /* =====================================================
@@ -168,9 +200,7 @@ export const verifySignupOtp = async (req, res) => {
 
     await prisma.pendingUser.delete({ where: { email } });
 
-    const token = signJwt({ userId: user.id });
-    res.cookie("token", token, COOKIE_OPTS);
-    res.json({ success: true, user: publicUser(user) });
+    return grantSession(res, user);
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Server error" });
@@ -195,9 +225,7 @@ export const signin = async (req, res) => {
     const ok = await dohashValidation(password, user.passwordHash);
     if (!ok) return res.status(401).json({ message: "Invalid credentials" });
 
-    const token = signJwt({ userId: user.id });
-    res.cookie("token", token, COOKIE_OPTS);
-    res.json({ success: true, user: publicUser(user) });
+    return grantSession(res, user);
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Server error" });
@@ -306,9 +334,7 @@ export const verifyLoginOtp = async (req, res) => {
       data: { otpHash: null, otpExpiresAt: null, otpPurpose: null },
     });
 
-    const token = signJwt({ userId: user.id });
-    res.cookie("token", token, COOKIE_OPTS);
-    res.json({ success: true, user: publicUser(user) });
+    return grantSession(res, user);
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Server error" });
@@ -492,9 +518,7 @@ export const googleAuth = async (req, res) => {
       });
     }
 
-    const token = signJwt({ userId: user.id });
-    res.cookie("token", token, COOKIE_OPTS);
-    res.json({ success: true, user: publicUser(user) });
+    return grantSession(res, user);
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "OAuth failed" });
@@ -503,7 +527,7 @@ export const googleAuth = async (req, res) => {
 
 export const me = async (req, res) => {
   try {
-    const token = req.cookies?.token;
+    const token = readSessionToken(req);
     if (!token) {
       return res.status(401).json({ message: "Not authenticated" });
     }
@@ -558,13 +582,20 @@ export const me = async (req, res) => {
 };
 
 export const logout = (req, res) => {
-  res.clearCookie("token", {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    path: "/",
-  });
+  // Cleared with the attributes it was set with. A browser matches a deletion
+  // by name, domain and path, so `path: "/"` is the part that must agree —
+  // sameSite and secure disagreeing with COOKIE_OPTS meant the clearing
+  // Set-Cookie was itself a SameSite=Lax, non-Secure cookie, which is a header
+  // some browsers will not even accept over the cross-site request that logout
+  // is here. Reusing COOKIE_OPTS keeps the two ends from drifting again.
+  const { maxAge, ...clearOpts } = COOKIE_OPTS;
+  res.clearCookie("token", clearOpts);
 
+  // The bearer copy lives in the client's localStorage, out of this server's
+  // reach — the frontend drops it in the same handler that calls this. Nothing
+  // here can revoke it, which is what a 7-day stateless JWT means in both
+  // carriers: the cookie stops being sent, the token stops being attached, and
+  // neither is invalidated server-side.
   return res.status(200).json({
     success: true,
     message: "Logged out successfully",

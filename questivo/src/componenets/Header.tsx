@@ -12,7 +12,6 @@ import {
   User,
   SlidersHorizontal,
 } from "lucide-react";
-import axios from "axios";
 import { useAudience } from "./AudienceProvider";
 import type { FeatureId } from "../lib/audience";
 import { SHOW_AI_GENERATOR } from "../lib/featureFlags";
@@ -27,13 +26,10 @@ interface User {
 
 /* ================= AXIOS ================= */
 
-import { API_BASE } from '../lib/apiBase';
+import { createApiClient } from '../lib/api';
+import { clearSessionToken } from '../lib/session';
 
-
-const api = axios.create({
-  baseURL: API_BASE,
-  withCredentials: true,
-});
+const api = createApiClient();
 
 /* ================= NAV ================= */
 
@@ -162,6 +158,10 @@ const Header: React.FC = () => {
     setUser(null);
     setTypedText("");
     localStorage.removeItem("user");
+    // The server's Set-Cookie clears the cookie; this is the other carrier, and
+    // it is only reachable from here. Without it the bearer token outlives the
+    // logout and the next /me answers as the user who just left.
+    clearSessionToken();
 
     navigate("/", { replace: true });
   };
