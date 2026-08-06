@@ -51,9 +51,18 @@ const FOOTER_PT = 34;
  * of the crop — enough ink to defeat the whitespace trim, so the last option of
  * every question that ended a page came out seventeen times taller than its
  * three siblings: one line of text above an empty half-page.
+ *
+ * The last alternative is ALLEN's, written exactly as the text layer emits it.
+ * Its booklets print "ALLEN CAREER INSTITUTE PVT. LTD., KOTA" across the foot
+ * of every page, but only "CAREER INSTITUTE PVT. LTD., KOTA" is TEXT — the
+ * "ALLEN" wordmark beside it is vector art with no characters — so a pattern
+ * anchored on the brand name matches nothing. It was not matching: across the
+ * 26 pages of the 2026 Paper-1 Maths booklet this rule fired on zero of them,
+ * every page fell through to pageH - 34, and the footer was inside every crop
+ * that reached the bottom of a page.
  */
 const FOOTER_LINE =
-  /^(?:Organi[sz]ing Institute|Page\s+\d+\s+of\s+\d+\b)|^JEE\s*\(|Held\s+on\s+(?:Sun|Mon|Tues|Wednes|Thurs|Fri|Satur)day/i;
+  /^(?:Organi[sz]ing Institute|Page\s+\d+\s+of\s+\d+\b)|^JEE\s*\(|Held\s+on\s+(?:Sun|Mon|Tues|Wednes|Thurs|Fri|Satur)day|^\s*(?:ALLEN\s+)?CAREER\s+INSTITUTE\b/i;
 /**
  * How far above a matched footer line the rest of the footer may sit.
  *
@@ -81,6 +90,74 @@ const PAD = 3;
  * stops a page-deep block from dragging the crop over the question above.
  */
 const MAX_LABEL_LIFT_LINES = 3;
+
+/**
+ * How wide a repeating drawn mark must be to be read as a footer BAND.
+ *
+ * The footer rules above read text, and ALLEN's advertising banner has none —
+ * it is a single 524x62pt raster sitting at y=735 on a 842pt page, under a
+ * hairline rule at y=732, on every page of the booklet. The drawn-ink furniture
+ * pass in regionInk.mjs is the only thing that sees it at all, and until the
+ * crop bounds consulted that pass every question whose band ran to the foot of
+ * a page was published with "Predict your JEE Adv. 2026 rank — ALLEN's FREE
+ * RANK PREDICTOR — Click here" printed under it.
+ *
+ * Width is what separates that band from ordinary repeating ink. MathonGo's
+ * 2022 compilations repeat a decorative 20x20pt glyph grid down every page,
+ * eighteen of whose marks sit in the bottom margin — taking the highest of
+ * THOSE as the floor would have cut 67pt of real question off every crop in
+ * the year. A footer band runs margin to margin, because that is what makes it
+ * a footer; the grid marks are 20pt of a 596pt page.
+ */
+const FURNITURE_BAND_SHARE = 0.8;
+
+/**
+ * On what share of a document's pages a text block must recur to be furniture.
+ *
+ * The diagonal "ALLEN" watermark is a TEXT block — x=91, y=214, 423x423pt on
+ * the 2026 Paper-1 Maths pages — and the bodyTop lift below has no defence
+ * against it once fullWidth removes the column bound: it starts above the
+ * question number, is still under way at the number's line, and sits inside the
+ * lift floor, which is everything the lift asks. It dragged Maths Q13's crop up
+ * from y=222 to y=211 and brought the bottom 3pt of "Negative Marks : -1 In all
+ * other cases." in with it, and lifted three Chemistry questions by up to 39pt.
+ * A block standing at the same place to the point on nine pages in ten is
+ * furniture; a question's own cell never recurs.
+ */
+const BLOCK_FURNITURE_SHARE = 0.5;
+
+/**
+ * How far off the question-number column an anchor may sit and still be one.
+ *
+ * One digit's width, because that is the size of the wobble a column actually
+ * has: a number is set to a tab and the glyph that lands on it is not always
+ * the same width. 2026 Paper-2 Physics rounds four of its eighteen numbers to
+ * x=34 and the rest to x=35; the 3 Apr 2025 Shift-1 Maths booklet sets four of
+ * its twenty-five at x=41 against x=35 for the rest, and 4 Apr Shift-1
+ * Chemistry sets two at 306 and 310 against 304.
+ *
+ * A hairline 2.5pt was tried first and cost five real questions their crop in
+ * those two files alone. At one digit every one of the 57 ALLEN booklets of
+ * 2025 lands on exactly 25 anchors and every MathonGo compilation of 2022-2024
+ * on exactly 90 — the paper's own question count, to the question — while none
+ * of the false anchors comes within 45pt of a column.
+ */
+const NUMBER_COLUMN_TOLERANCE = 8;
+/** A column carrying less than this share of the anchors is not a column. */
+const NUMBER_COLUMN_MIN_SHARE = 0.2;
+/** ...and below this the columns explain too little of the page to be trusted. */
+const NUMBER_COLUMN_MIN_COVERAGE = 0.5;
+
+/**
+ * How many pages past its own a question's band may run.
+ *
+ * One. A question ends at its own answer line, which the paper prints directly
+ * beneath it, so the furthest a real question reaches is the top of the
+ * following page. A larger span means a question number went unread and the
+ * band has run on into somebody else's territory; the old behaviour — stop at
+ * the foot of this page — is the safer answer there.
+ */
+const MAX_SPAN_PAGES = 1;
 
 /**
  * What share of a booklet's question numbers must stand in the right half of
@@ -118,8 +195,92 @@ function pagesAreTwoUp(anchors) {
   return right / anchors.length >= TWO_UP_MIN_RIGHT;
 }
 
+/**
+ * Where this file writes its question numbers, so a number printed anywhere
+ * else can be refused.
+ *
+ * THE ANCHOR TEST HAS TO BE STRUCTURAL, BECAUSE THE TEXTUAL ONE CANNOT WIN.
+ *
+ * "A number, a dot, and not a digit after it" is also what a reagent written
+ * over a reaction arrow looks like, and a fraction's denominator, and a graph's
+ * tick label. The 2026 Paper-1 Chemistry booklet contributes fourteen of them —
+ * "1. LiBH4", "2. H", "1. Kolbe's electrolysis", "2.V2O5, 500°C", "1. (CH CO)
+ * O" — and the Maths booklet one: the "4.x" of −lnx/(4x^{3/2}) inside question
+ * 1's worked solution, on page 0. Question 4 is on page 4, but the false
+ * sighting is first in document order, so `locate` took it: Maths Q4 was
+ * published as a picture of question 1's algebra, the advertising banner and
+ * the footer, while its extracted TEXT — "Considering only the principal values
+ * of the inverse trigonometric functions…" — was perfectly correct. The same
+ * false anchors served as the next question's band bottom, which is what
+ * truncated Chemistry Q8 at 61pt and Q16 at 136pt.
+ *
+ * No further regex answers this. What does is that a question number is set in
+ * a column and nothing else in the file is: across the three 2026 Paper-1
+ * booklets all 48 real numbers sit at x=35.0 and not one of the 15 false ones
+ * does. So the columns are read off the anchors themselves — the x values a
+ * meaningful share of them agree on — and anchors standing anywhere else are
+ * dropped.
+ *
+ * Two-up booklets have two such columns and both are found; that is why this
+ * clusters rather than taking a single modal x. And it refuses to act at all
+ * when the columns it finds explain less than half the anchors, because a file
+ * this cannot read is better left to the old behaviour than filtered on a guess.
+ *
+ * @returns {Array<number>|null} the accepted column x's, or null to filter none
+ */
+function numberColumns(anchors) {
+  if (anchors.length < 4) return null;
+
+  const xs = anchors.map((a) => a.x).sort((p, q) => p - q);
+  const clusters = [];
+  for (const x of xs) {
+    const last = clusters[clusters.length - 1];
+    if (last && x - last.at <= NUMBER_COLUMN_TOLERANCE) { last.n++; continue; }
+    clusters.push({ at: x, n: 1 });
+  }
+
+  const floor = Math.max(3, anchors.length * NUMBER_COLUMN_MIN_SHARE);
+  const kept = clusters.filter((c) => c.n >= floor);
+  const covered = kept.reduce((a, c) => a + c.n, 0);
+  if (!kept.length || covered < anchors.length * NUMBER_COLUMN_MIN_COVERAGE) return null;
+  return kept.map((c) => c.at);
+}
+
 /** "(1)" / "(2)" ... or "(A)" / "(B)" ... at the start of a line or after space. */
 const OPTION_MARK = /(?:^|\s)\(\s*([1-4A-D])\s*\)/g;
+
+/**
+ * A stem the paper prints ONCE and asks two questions about.
+ *
+ * JEE Advanced's last section is built this way — "This section contains TWO
+ * (02) question stems. There are TWO (02) questions corresponding to each
+ * question stem." — and the shared part is headed with its own printed marker
+ * naming the questions it belongs to. Without it a question is unanswerable and
+ * looks it: 2026 Paper-2 Maths Q15 was published as "The value of n is
+ * ______.", the entire definition of n sitting a few lines above it under
+ * "Question Stem for Question Nos. 15 and 16" and in no crop at all.
+ *
+ * The numbers are captured because they are the safest thing on the page: this
+ * marker says which questions it serves, so nothing has to be inferred from
+ * where it sits.
+ */
+const SHARED_STEM =
+  /^Question\s+Stems?\s+for\s+Questions?\s+Nos?\.?\s*(\d{1,3})\s*(?:and|&|,|to|[-–—])\s*(\d{1,3})/i;
+
+/**
+ * The same thing under its other name, which names no questions.
+ *
+ * The 2021 Paper-2 booklets head theirs "Paragraph" on a line of its own —
+ * "This section contains TWO (02) paragraphs. Based on each paragraph, there
+ * are TWO (02) questions" — so it has to be bounded by what follows it instead:
+ * it serves every question until the next paragraph or the next section.
+ * Anchored at both ends so it can only match a heading, never a stem that uses
+ * the word.
+ */
+const BARE_PARAGRAPH = /^Paragraph\s*$/i;
+
+/** Any section heading — the outer bound on a paragraph that names no numbers. */
+const SECTION_HEAD = /^SECTION\s*[-–—]?\s*[A-Z0-9]/i;
 
 /**
  * Lines that look like a question anchor but are not one.
@@ -209,6 +370,12 @@ function structureOf(doc, pattern) {
   const footerHit = new Map();
   /** Every text block's box, for locating the cell a question number labels. */
   const blocks = [];
+  /** How many pages each block box recurs on — see BLOCK_FURNITURE_SHARE. */
+  const blockPages = new Map();
+  /** Headings for a stem two questions share. */
+  const sharedStems = [];
+  /** Page and y of every section heading, bounding an unnumbered paragraph. */
+  const sectionHeads = [];
   /** Page and y of the first "SECTION-A" heading, if the file has one. */
   let paperStart = null;
 
@@ -218,6 +385,9 @@ function structureOf(doc, pattern) {
     try { st = JSON.parse(page.toStructuredText().asJSON()); } catch { continue; }
     const [, , pageW, pageH] = page.getBounds();
 
+    /** Block boxes already counted on THIS page, so one page counts once. */
+    const boxesHere = new Set();
+
     for (const block of st.blocks || []) {
       // Kept whole, not just as lines. A question number and the question
       // beside it are two blocks, and only the block bbox says how far the
@@ -226,7 +396,12 @@ function structureOf(doc, pattern) {
       let blockIndex = -1;
       if (bb.w) {
         blockIndex = blocks.length;
-        blocks.push({ page: p, index: blockIndex, x: bb.x ?? 0, y: bb.y ?? 0, w: bb.w, h: bb.h ?? 0 });
+        const box = `${Math.round(bb.x ?? 0)},${Math.round(bb.y ?? 0)},${Math.round(bb.w)},${Math.round(bb.h ?? 0)}`;
+        if (!boxesHere.has(box)) {
+          boxesHere.add(box);
+          blockPages.set(box, (blockPages.get(box) ?? 0) + 1);
+        }
+        blocks.push({ page: p, index: blockIndex, box, x: bb.x ?? 0, y: bb.y ?? 0, w: bb.w, h: bb.h ?? 0 });
       }
 
       for (const line of block.lines || []) {
@@ -246,8 +421,24 @@ function structureOf(doc, pattern) {
         // Blue / Black Ball point pen only." — which match the question pattern
         // exactly. Taking the first "1." on the file cropped that page instead
         // of question 1. The paper starts at SECTION-A.
-        if (!paperStart && /^SECTION\s*[-–]?\s*A\b/i.test(text)) {
+        //
+        // "A" was the only shape this knew, and JEE Advanced does not print it:
+        // its booklets head their four sections "SECTION-1 (Maximum Marks :
+        // 12)", "SECTION-2 :" and so on, so not one line of any of the thirteen
+        // 2026 files matched, paperStart stayed null, and this guard was dead
+        // code across the whole exam. convertJeeAdvancedAllen.mjs:284 already
+        // knew the right shape; this did not.
+        if (!paperStart && /^SECTION\s*[-–—]?\s*[A1]\b/i.test(text)) {
           paperStart = { page: p, y: b.y ?? 0 };
+        }
+        if (SECTION_HEAD.test(text)) sectionHeads.push(at);
+
+        // A stem two questions share, headed by its own printed marker.
+        const stemFor = SHARED_STEM.exec(text);
+        if (stemFor) {
+          sharedStems.push({ ...at, from: Number(stemFor[1]), to: Number(stemFor[2]) });
+        } else if (BARE_PARAGRAPH.test(text)) {
+          sharedStems.push({ ...at, from: null, to: null });
         }
 
         // "Choose the correct answer from the options given below :" divides a
@@ -317,8 +508,23 @@ function structureOf(doc, pattern) {
   const afterStart = (a) =>
     !paperStart || a.page > paperStart.page || (a.page === paperStart.page && a.y >= paperStart.y);
 
+  // Then only the ones standing in a question-number column — see
+  // numberColumns for the fifteen false anchors this removes and the crops
+  // each of them wrecked.
+  const started = questions.filter(afterStart);
+  const columns = numberColumns(started);
+  const inColumn = (a) =>
+    !columns || columns.some((x) => Math.abs(a.x - x) <= NUMBER_COLUMN_TOLERANCE);
+
+  // A block box standing in the same place on most pages is the watermark or
+  // the running header, not a question's cell.
+  const pages = doc.countPages();
+  const recurs = Math.max(2, Math.ceil(pages * BLOCK_FURNITURE_SHARE));
+  for (const b of blocks) b.furniture = pages >= 3 && (blockPages.get(b.box) ?? 0) >= recurs;
+
   return {
-    questions: questions.filter(afterStart), options, stops, solutions, instructions, footers, blocks,
+    questions: started.filter(inColumn),
+    options, stops, solutions, instructions, footers, blocks, sharedStems, sectionHeads,
   };
 }
 
@@ -537,6 +743,12 @@ function toTrimmedPNG(pix, trimSides = true) {
  * page cannot show them, so the candidate got a question with four blank
  * choices no matter how the band was measured.
  *
+ * The regions are a LIST rather than a pair because a question's parts do not
+ * always sit next to each other: JEE Advanced prints one stem for a pair of
+ * questions and then both questions under it, so the second of the pair is its
+ * shared stem, from wherever that is, followed by its own band, followed by
+ * whatever ran overleaf. They are stacked in reading order.
+ *
  * Each region is rendered on its own and the results are copied into one
  * pixmap, rather than running both pages into a single device. Running them
  * directly would work only without clipping, and page 5's footer would then
@@ -699,12 +911,48 @@ export function extractFigures({ pdfPath, outDir, wanted, mode, fullWidth = fals
   // off the page. The two-up coaching booklets genuinely vary and keep the
   // detection.
   const forcedLabels = mode === "gate" ? ["A", "B", "C", "D"] : null;
-  const { questions: anchors, options: optionMarks, stops, solutions, instructions, footers, blocks } =
-    structureOf(doc, pattern);
+  const {
+    questions: anchors, options: optionMarks, stops, solutions, instructions, footers, blocks,
+    sharedStems, sectionHeads,
+  } = structureOf(doc, pattern);
 
-  /** How far down a page a crop may go: above its footer, else the old inset. */
-  const contentBottom = (pageIndex, pageH) =>
-    footers.has(pageIndex) ? footers.get(pageIndex) - 2 : pageH - FOOTER_PT;
+  // Which regions genuinely need to BE a picture, rather than merely having
+  // one available. The crop is still cut either way — the image stays on the
+  // row as the fallback for when the extracted text is wrong — but a caller
+  // that can publish text should know when it may. See lib/regionInk.mjs.
+  //
+  // The furniture pass reads every page once, so it is done here rather than
+  // per question — and before the crop bounds, which need its boxes.
+  const furniture = documentFurniture(doc);
+
+  /**
+   * The top of the page's own advertising/footer band, from the DRAWN ink.
+   *
+   * Read once for the document because that is what makes it furniture: the
+   * band is in the same place on every page. Bounded to the bottom margin and
+   * to marks that run the width of the sheet, so an ordinary repeating
+   * decoration cannot pass for a footer — see FURNITURE_BAND_SHARE.
+   */
+  const bandFloor = (() => {
+    let sheetW = 0;
+    try { sheetW = doc.loadPage(0).getBounds()[2]; } catch { return Infinity; }
+    if (!(sheetW > 0)) return Infinity;
+    let floor = Infinity;
+    for (const m of furniture.marks) {
+      if (!Number.isFinite(m.y0) || m.w < sheetW * FURNITURE_BAND_SHARE) continue;
+      floor = Math.min(floor, m.y0);
+    }
+    return floor;
+  })();
+
+  /**
+   * How far down a page a crop may go: above its footer, else the old inset —
+   * and never into the drawn footer band, which no footer rule can read.
+   */
+  const contentBottom = (pageIndex, pageH) => {
+    const fromText = footers.has(pageIndex) ? footers.get(pageIndex) - 2 : pageH - FOOTER_PT;
+    return bandFloor >= pageH * FOOTER_ZONE ? Math.min(fromText, bandFloor) : fromText;
+  };
 
   const byNumber = new Map();
   for (const a of anchors) {
@@ -732,6 +980,38 @@ export function extractFigures({ pdfPath, outDir, wanted, mode, fullWidth = fals
   // single-column and crop the next one twice as wide.
   const twoUpBooklet = pagesAreTwoUp(anchors);
 
+  // In reading order, so "the last one before this question" means it.
+  const readingOrder = (p, q) => p.page - q.page || p.y - q.y;
+  const stemHeads = [...sharedStems].sort(readingOrder);
+  const heads = [...sectionHeads].sort(readingOrder);
+
+  /**
+   * The shared-stem heading this question belongs to, or null.
+   *
+   * The numbered form needs no bounding — it names the questions it serves, so
+   * a heading that does not name this one is simply not its heading. The bare
+   * "Paragraph" of the 2021 booklets names none, so it runs until the next
+   * paragraph or the next section heading and no further; without that bound a
+   * single "Paragraph" would attach itself to every question in the rest of the
+   * file.
+   */
+  const sharedStemFor = (a) => {
+    const precedes = (o) => o.page < a.page || (o.page === a.page && o.y < a.y);
+    const named = stemHeads.filter(
+      (s) => precedes(s) && s.from !== null && a.n >= s.from && a.n <= s.to
+    );
+    if (named.length) return named[named.length - 1];
+
+    const bare = stemHeads.filter((s) => precedes(s) && s.from === null);
+    const last = bare[bare.length - 1];
+    if (!last) return null;
+    const between = (o) =>
+      (o.page > last.page || (o.page === last.page && o.y > last.y)) && precedes(o);
+    if (stemHeads.some((s) => s !== last && between(s))) return null;
+    if (heads.some(between)) return null;
+    return last;
+  };
+
   /** Where question `w` sits in this file, under whichever numbering it uses. */
   const locate = (w) => {
     if (anchorBase !== null && w.subjectNumber) {
@@ -746,17 +1026,27 @@ export function extractFigures({ pdfPath, outDir, wanted, mode, fullWidth = fals
   let written = 0;
   const missing = [];
 
-  // Which regions genuinely need to BE a picture, rather than merely having
-  // one available. The crop is still cut either way — the image stays on the
-  // row as the fallback for when the extracted text is wrong — but a caller
-  // that can publish text should know when it may. See lib/regionInk.mjs.
-  //
-  // The furniture pass reads every page once, so it is done here rather than
-  // per question.
-  const furniture = documentFurniture(doc);
+  /**
+   * One Page object per page, however many crops are taken from it.
+   *
+   * A span reaches across pages and a shared stem across two more, so a single
+   * question can ask for four of them and a booklet for hundreds — each one a
+   * live WASM object waiting on a finaliser. That is the same pressure that
+   * once made mupdf fail to load pages at all and took 1,176 questions down
+   * with it; see the sampling note in regionInk.documentFurniture. A page is
+   * only read here, so one handle serves everybody.
+   */
+  const pageCache = new Map();
+  const pageAt = (index) => {
+    if (!pageCache.has(index)) pageCache.set(index, doc.loadPage(index));
+    return pageCache.get(index);
+  };
+
   const drawingsByPage = new Map();
   const drawingsFor = (index, pageObj) => {
-    if (!drawingsByPage.has(index)) drawingsByPage.set(index, pageDrawings(pageObj, furniture));
+    if (!drawingsByPage.has(index)) {
+      drawingsByPage.set(index, pageDrawings(pageObj, furniture.signatures));
+    }
     return drawingsByPage.get(index);
   };
 
@@ -764,7 +1054,7 @@ export function extractFigures({ pdfPath, outDir, wanted, mode, fullWidth = fals
     const a = locate(w);
     if (!a) { missing.push(w.baseName); continue; }
 
-    const page = doc.loadPage(a.page);
+    const page = pageAt(a.page);
     // Only some ALLEN booklets are set two-up. MathonGo and GATE both run one
     // column down the page, and so — measured, not assumed — do ALLEN's JEE
     // Advanced booklets. See `pagesAreTwoUp`.
@@ -783,15 +1073,48 @@ export function extractFigures({ pdfPath, outDir, wanted, mode, fullWidth = fals
     const colX1 = fullWidth ? a.pageW : twoUp ? (a.x < mid ? mid : a.pageW - PAD) : a.pageW - PAD;
 
     const sameColumn = (o) => !twoUp || (o.x < mid) === (a.x < mid);
-    const below = (o) => o.page === a.page && o.y > a.y + 4 && sameColumn(o);
 
-    const nextQ = anchors.filter(below).sort((p, q) => p.y - q.y)[0];
-    const nextStop = stops.filter(below).sort((p, q) => p.y - q.y)[0];
+    /**
+     * A QUESTION'S BOUNDARIES ARE TEXT MARKERS, SO THEY CROSS PAGE BREAKS.
+     *
+     * This asked `o.page === a.page`, and a page break is not a boundary the
+     * paper prints. Six of the 48 questions in the 2026 Paper-1 booklets have
+     * their answer line on the page AFTER their number — Maths Q6 and Q13,
+     * Physics Q15 and Q16, Chemistry Q8 and Q9 — and for exactly those six the
+     * end list came back empty, the band fell through to the foot of the page,
+     * and everything printed overleaf was lost. Maths Q13 is the plainest: its
+     * List-I/List-II table was cropped from page 16 while all four of its
+     * options sit at the top of page 17, in no crop at all.
+     *
+     * Reading order, not y: below on this page, or anywhere on a later one.
+     *
+     * Two-up booklets keep the old same-page test. There the column beside a
+     * question is the worked solution rather than a continuation, so "later in
+     * the file" and "later in this column" are different questions, and the
+     * per-column logic already keeps a question whole.
+     */
+    const after = (o) =>
+      sameColumn(o) &&
+      (twoUp
+        ? o.page === a.page && o.y > a.y + 4
+        : o.page > a.page || (o.page === a.page && o.y > a.y + 4));
+    const inReadingOrder = (p, q) => p.page - q.page || p.y - q.y;
+
+    const nextQ = anchors.filter(after).sort(inReadingOrder)[0];
+    const nextStop = stops.filter(after).sort(inReadingOrder)[0];
 
     // Where this question's territory ends: the next question, or its own
-    // answer line, whichever comes first.
-    const ends = [nextQ?.y, nextStop?.y].filter((v) => typeof v === "number");
-    const bandBottom = ends.length ? Math.min(...ends) - 2 : contentBottom(a.page, a.pageH);
+    // answer line, whichever comes first in reading order.
+    const endAt = [nextQ, nextStop]
+      .filter(Boolean)
+      .sort(inReadingOrder)[0] ?? null;
+    // A marker more than MAX_SPAN_PAGES away means a question number went
+    // unread somewhere between, not that this question is that long.
+    const endsHere = endAt && endAt.page === a.page;
+    const endsOverleaf = endAt && endAt.page > a.page && endAt.page - a.page <= MAX_SPAN_PAGES;
+    const bandBottom = endsHere
+      ? Math.min(endAt.y - 2, contentBottom(a.page, a.pageH))
+      : contentBottom(a.page, a.pageH);
 
     /**
      * Where the question actually starts, which is not always its number.
@@ -842,6 +1165,17 @@ export function extractFigures({ pdfPath, outDir, wanted, mode, fullWidth = fals
         return a.y - b.y < a.h ? Math.min(top, b.y) : top;
       }
       if (b.page !== a.page || b.y >= a.y || b.y < liftFloor) return top;
+      // Not a block that stands in the same place on every page.
+      //
+      // The only thing holding this lift inside the question was the column
+      // test below, and fullWidth sets colX0=0 and colX1=pageW, so it rejected
+      // nothing at all. The diagonal ALLEN watermark — a 423x423pt text block —
+      // then satisfied every remaining condition and lifted Maths Q13's crop
+      // 11pt over its own number, far enough to catch the bottom of "Negative
+      // Marks : -1 In all other cases." from the marking scheme above. Nothing
+      // about the box says it is a watermark; that it is in the same place on
+      // 24 of the booklet's 26 pages does.
+      if (b.furniture) return top;
       if (b.x < colX0 || b.x >= colX1) return top;
       // Must still be under way at the number's own line, or it is a different
       // row of the table rather than this one.
@@ -849,8 +1183,49 @@ export function extractFigures({ pdfPath, outDir, wanted, mode, fullWidth = fals
       if (anchors.some((q) => q !== a && q.page === a.page && q.y >= b.y && q.y < a.y)) return top;
       return Math.min(top, b.y);
     }, a.y);
-    const bandTop = Math.max(0, bodyTop - PAD);
+    let bandTop = Math.max(0, bodyTop - PAD);
     if (bandBottom - bandTop < MIN_HEIGHT_PT) { missing.push(w.baseName); continue; }
+
+    /**
+     * The stem the paper prints once and asks this question about.
+     *
+     * Its own heading says which questions it serves — "Question Stem for
+     * Question Nos. 15 and 16" — so this is read off the page rather than
+     * inferred from where anything sits. 2026 Paper-2 Maths Q15 was published
+     * as the four words "The value of n is ______." with everything that
+     * defines n in no crop at all; its pair, Q16, had the same stem printed
+     * three hundred points above its own number and equally absent.
+     *
+     * It routinely lands on the page BEFORE the question — 2026 Paper-2 Physics
+     * heads Q15 and Q16 at the very foot of page 15 and does not reach the "15."
+     * until page 16 — which is the other direction a question's region has to be
+     * able to cross a page break in.
+     */
+    const sharedRegions = [];
+    const shared = sharedStemFor(a);
+    if (shared) {
+      // The shared part ends where the first question of the pair begins.
+      const opensPair = anchors
+        .filter((q) => q.page > shared.page || (q.page === shared.page && q.y > shared.y))
+        .sort(inReadingOrder)[0];
+      const sharedTop = Math.max(0, shared.y - PAD);
+      if (opensPair && opensPair.page - shared.page <= MAX_SPAN_PAGES) {
+        if (opensPair === a && shared.page === a.page) {
+          // This question opens the pair and the stem is directly above it:
+          // one rectangle, not two stacked with a seam between them.
+          bandTop = Math.min(bandTop, sharedTop);
+        } else {
+          for (let p = shared.page; p <= opensPair.page; p++) {
+            const from = p === shared.page ? sharedTop : HEADER_PT;
+            const to = p === opensPair.page
+              ? Math.min(opensPair.y - 2, contentBottom(p, a.pageH))
+              : contentBottom(p, a.pageH);
+            if (to - from < MIN_HEIGHT_PT) continue;
+            sharedRegions.push({ page: pageAt(p), rect: [colX0, from, colX1, to] });
+          }
+        }
+      }
+    }
 
     const mine = { };
     const write = (name, rect) => {
@@ -867,12 +1242,10 @@ export function extractFigures({ pdfPath, outDir, wanted, mode, fullWidth = fals
         return null;
       }
     };
-    /** Write one image spanning this page and its continuation. */
-    const writeSpan = (name, rect, cont) => {
+    /** Write one image out of several page regions, stacked in reading order. */
+    const writeSpan = (name, regions) => {
       try {
-        const png = renderSpan(
-          [{ page, rect }, { page: cont.page, rect: cont.rect }], SCALE, !fullWidth
-        );
+        const png = renderSpan(regions, SCALE, !fullWidth);
         if (!png) return null;
         fs.writeFileSync(path.join(outDir, name), png);
         written++;
@@ -910,17 +1283,11 @@ export function extractFigures({ pdfPath, outDir, wanted, mode, fullWidth = fals
     // is the case — reaction scheme at the foot of page 5, all four structures
     // at the head of page 6 — and cropped to one page it is unanswerable.
     //
-    // The test is deliberately narrow: OPTIONS ARE MISSING, not merely that the
-    // question is the last on its page. Half of every paper is the last
-    // question on some page, and stitching all of those on would have stapled
-    // the next question underneath 131 of GATE's 178 choice questions.
-    //
-    // Not attempted for the two-up booklets: there the right-hand column is the
-    // worked solution rather than a continuation, and the per-column logic
-    // already keeps a question whole.
     // Where the text carries on after this region ends, in reading order: the
     // right column of the same page for a two-up booklet's left column, else
-    // the top of the next page.
+    // the top of the next page. Used only where no end marker was found on this
+    // page at all — with one, the span below reads to the marker itself instead
+    // of guessing how far down the next region to go.
     const nextRegion = () => {
       if (twoUp && a.x < mid) return { pageIndex: a.page, x0: mid, x1: a.pageW - PAD };
       if (a.page + 1 >= doc.countPages()) return null;
@@ -929,9 +1296,33 @@ export function extractFigures({ pdfPath, outDir, wanted, mode, fullWidth = fals
         : { pageIndex: a.page + 1, x0: colX0, x1: colX1 };
     };
 
-    let continuation = null;
+    /** The rest of a question, on the pages after the one its number is on. */
+    const continuation = [];
     const optionsMissing = w.wantOptions !== false && Object.keys(optRects).length < 4;
-    if (optionsMissing && !ends.length) {
+
+    if (endsOverleaf && (w.wantOptions === false || optionsMissing)) {
+      // The end marker is on a later page, so the question demonstrably carries
+      // on there and this reads to it — page by page, skipping each running
+      // header, stopping at the marker's own line.
+      //
+      // Conditioned on the question not already being complete here, because
+      // half of every paper is the last question on some page and its next
+      // marker is overleaf by nothing more than typesetting. Stitching all of
+      // those on would staple blank paper — or the next question — under 131 of
+      // GATE's 178 choice questions, which is what the narrow test below was
+      // written for in the first place.
+      for (let p = a.page + 1; p <= endAt.page; p++) {
+        const stopAt = p === endAt.page
+          ? Math.min(endAt.y - 2, contentBottom(p, a.pageH))
+          : contentBottom(p, a.pageH);
+        if (stopAt - HEADER_PT < MIN_HEIGHT_PT) continue;
+        continuation.push({ page: pageAt(p), rect: [colX0, HEADER_PT, colX1, stopAt] });
+      }
+    } else if (optionsMissing && !endsHere) {
+      // No end marker on this page: the old reach into the next region, which
+      // is the right-hand column for a two-up booklet and the next page
+      // otherwise. Still the only continuation a two-up booklet ever gets, and
+      // the fallback for a marker so far away that the span above refused it.
       const region = nextRegion();
       const inRegion = (o) => region && o.page === region.pageIndex && o.x >= region.x0 && o.x < region.x1;
       const endsThere = [
@@ -944,10 +1335,10 @@ export function extractFigures({ pdfPath, outDir, wanted, mode, fullWidth = fals
       // Nothing worth adding if the next question starts at the top of that
       // region — then this one really did finish where its column did.
       if (region && contBottom - HEADER_PT >= MIN_HEIGHT_PT) {
-        continuation = {
-          page: doc.loadPage(region.pageIndex),
+        continuation.push({
+          page: pageAt(region.pageIndex),
           rect: [region.x0, HEADER_PT, region.x1, contBottom],
-        };
+        });
       }
     }
 
@@ -980,7 +1371,7 @@ export function extractFigures({ pdfPath, outDir, wanted, mode, fullWidth = fals
     // A question that runs onto the next page is never complete however many
     // markers were found on this one: the rest of it is on a page these
     // rectangles do not cover.
-    const located = Object.keys(optRects).length === 4 && !continuation;
+    const located = Object.keys(optRects).length === 4 && !continuation.length;
     const optionFiles = {};
     if (located || !wantedOptions) {
       for (const [letter, rect] of Object.entries(optRects)) {
@@ -997,15 +1388,26 @@ export function extractFigures({ pdfPath, outDir, wanted, mode, fullWidth = fals
     else for (const name of Object.values(optionFiles)) discard(outDir, name);
 
     const stemBottom = firstOptionY !== null && complete ? firstOptionY - 1 : bandBottom;
-    if (continuation) {
-      // Both pages, as one image, so nothing the paper printed is off the edge.
-      mine.stem = writeSpan(`${w.baseName}_Q.png`, [colX0, bandTop, colX1, bandBottom], continuation);
-    } else if (stemBottom - bandTop >= MIN_HEIGHT_PT) {
-      mine.stem = write(`${w.baseName}_Q.png`, [colX0, bandTop, colX1, stemBottom]);
-    } else {
-      // The options start immediately: keep the whole band rather than nothing.
-      mine.stem = write(`${w.baseName}_Q.png`, [colX0, bandTop, colX1, bandBottom]);
-    }
+    // Options that were split out are cut off the stem; anything continuing
+    // overleaf means the band, not the stem, is what has to be kept whole.
+    const ownBottom = continuation.length
+      ? bandBottom
+      : stemBottom - bandTop >= MIN_HEIGHT_PT
+        ? stemBottom
+        // The options start immediately: keep the whole band rather than nothing.
+        : bandBottom;
+
+    // The question's picture, in reading order: the stem the paper prints once
+    // for a pair of questions, then this question's own band, then whatever
+    // continues overleaf.
+    const regions = [
+      ...sharedRegions,
+      { page, rect: [colX0, bandTop, colX1, ownBottom] },
+      ...continuation,
+    ];
+    mine.stem = regions.length === 1
+      ? write(`${w.baseName}_Q.png`, regions[0].rect)
+      : writeSpan(`${w.baseName}_Q.png`, regions);
 
     // Tell the caller whether the choices are inside the stem image, so a row
     // can be marked and the UI can say "the choices are in the image" instead
@@ -1030,7 +1432,12 @@ export function extractFigures({ pdfPath, outDir, wanted, mode, fullWidth = fals
         .filter((s) => s.page === a.page && s.y > a.y && sameColumn(s))
         .sort((p, q) => p.y - q.y)[0];
       if (sol) {
-        const solEnd = nextQ && nextQ.y > sol.y ? nextQ.y - 2 : contentBottom(a.page, a.pageH);
+        // The next question, only where it is on this page: `nextQ` now looks
+        // ahead in reading order, and comparing an overleaf y against this
+        // page's would put the solution's foot above its own head.
+        const solEnd = nextQ && nextQ.page === a.page && nextQ.y > sol.y
+          ? nextQ.y - 2
+          : contentBottom(a.page, a.pageH);
         if (solEnd - sol.y >= MIN_HEIGHT_PT) {
           const solRect = [colX0, Math.max(0, sol.y - PAD), colX1, solEnd];
           mine.solution = write(`${w.baseName}_S.png`, solRect);

@@ -144,10 +144,21 @@ const signature = (op) =>
  * pages, and no diagram ever is.
  *
  * Computed once per document and passed to pageDrawings.
+ *
+ * Returns the signatures AND the geometry, because two different callers need
+ * two different things from the same scan. pageDrawings needs the signatures,
+ * to subtract furniture from a region's ink. The crop bounds need the BOXES:
+ * ALLEN's advertising band — "Predict your JEE Adv. 2026 rank / FREE RANK
+ * PREDICTOR" — has no text layer at all, so no footer rule reading text can
+ * ever see it, and every crop that ran to the foot of a page carried it. This
+ * pass is the only thing in the pipeline that does see it, as
+ * `path 35,732 525x1` (the rule above it) and `image 35,735 524x62` (the
+ * banner). Scanning twice would mean replaying every sampled page through a JS
+ * device twice, which is what exhausted the WASM heap once already.
  */
 export function documentFurniture(doc) {
   const pages = doc.countPages();
-  if (pages < 3) return new Set();
+  if (pages < 3) return { signatures: new Set(), marks: [] };
 
   // Sampled, not exhaustive. Replaying a page through a JS device is thousands
   // of calls across the WASM boundary and allocates as it goes; doing it for
@@ -161,17 +172,29 @@ export function documentFurniture(doc) {
   for (let p = 0; p < pages && sample.length < FURNITURE_SAMPLE_PAGES; p += step) sample.push(p);
 
   const seen = new Map();
+  /** One representative op per signature, so the boxes survive the counting. */
+  const box = new Map();
   for (const p of sample) {
-    let marks;
+    let ops;
     try {
-      marks = new Set(rawDrawings(doc.loadPage(p)).map(signature));
+      ops = rawDrawings(doc.loadPage(p));
     } catch {
       continue;
     }
-    for (const sig of marks) seen.set(sig, (seen.get(sig) ?? 0) + 1);
+    const here = new Set();
+    for (const op of ops) {
+      const sig = signature(op);
+      here.add(sig);
+      if (!box.has(sig)) box.set(sig, op);
+    }
+    for (const sig of here) seen.set(sig, (seen.get(sig) ?? 0) + 1);
   }
   const threshold = Math.max(2, Math.ceil(sample.length * FURNITURE_SHARE));
-  return new Set([...seen].filter(([, n]) => n >= threshold).map(([sig]) => sig));
+  const repeated = [...seen].filter(([, n]) => n >= threshold).map(([sig]) => sig);
+  return {
+    signatures: new Set(repeated),
+    marks: repeated.map((sig) => box.get(sig)).filter(Boolean),
+  };
 }
 
 /** Is `op` inside `rect`, allowing for a crop's own padding? */

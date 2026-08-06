@@ -167,6 +167,13 @@ function answerIndex(lines) {
   const PATTERNS = [
     // "12. Ans. (B)", and the "4 Sol. . Ans. (C)" the extractor sometimes makes
     /(?:^|[\s.])(\d{1,2})\s*\.?\s*(?:Sol\s*\.?\s*\.?\s*)?Ans\s*\.?\s*[:(]\s*([^)]{1,40}?)\s*\)/gi,
+    // "10. Ans. 2520.00" — the same line without the brackets. The 2026
+    // booklets print every numerical key this way and nothing here could read
+    // one: both patterns demanded a "(" and a ")", so all four keys of Section
+    // 3 in each Paper-1 subject, and Paper-2's shared-stem answers, came back
+    // empty. Same shape as above so the number still has to be beside its own
+    // "Ans", and CLEAN_ANSWER below still has to recognise the value.
+    /(?:^|[\s.])(\d{1,2})\s*\.?\s*(?:Sol\s*\.?\s*\.?\s*)?Ans\s*\.?\s*(-?\d+(?:\.\d+)?)(?!\S)/gi,
     // "6Sol.. [C] is correctAns. (A,B) f(x)= ..." — the number, then working,
     // then the answer, all welded into one line. Anchored at the START of the
     // line and confined to it, so it can never reach across two questions.
@@ -328,14 +335,27 @@ function parseBooklet(lines) {
       const joined = block.join(" ").replace(new RegExp(`^\\s*${st.n}\\s*\\.\\s*`), "");
 
       // "Ans." separates the question from its key; "Sol." starts the working.
-      const ansAt = joined.search(/\bAns\.?\s*[:(]/i);
+      //
+      // BOTH FORMS OF THE ANSWER LINE, because the key is on the stem's side of
+      // the cut and a form this cannot read is a key lost AND a stem spoiled.
+      // These booklets bracket an option — "Ans. (C)", "Ans. (A,C,D)" — and
+      // print a numerical value bare: "Ans. 11.00", "Ans. 2520.00". Only the
+      // bracketed form was recognised, so for every numerical question the cut
+      // fell through to "Sol." instead, the key came out null, and the words
+      // "Ans. 11.00" stayed inside questionText — 13 rows in this archive read
+      // "The value of n is ___________. Ans. 11.00" with no correctAnswer at
+      // all, printing the answer to the candidate and scoring nobody.
+      const ansAt = joined.search(/\bAns\b\.?\s*(?:[:(]|-?\d)/i);
       const solAt = joined.search(/\bSol\b\.?\s/i);
       const qEnd = ansAt >= 0 ? ansAt : solAt >= 0 ? solAt : joined.length;
 
       const qBody = tidy(joined.slice(0, qEnd));
-      const ansRaw = ansAt >= 0
-        ? (joined.slice(ansAt).match(/Ans\.?\s*[:(]?\s*([^)\n]{1,30}?)\s*[)]/i) || [])[1] ?? null
-        : null;
+      const answerTail = ansAt >= 0 ? joined.slice(ansAt) : "";
+      const ansRaw = ansAt < 0
+        ? null
+        : (answerTail.match(/Ans\.?\s*[:(]\s*([^)\n]{1,30}?)\s*[)]/i)
+          || answerTail.match(/Ans\b\.?\s*(-?\d+(?:\.\d+)?)(?!\S)/i)
+          || [])[1] ?? null;
       const solution = solAt >= 0 ? tidy(joined.slice(solAt).replace(/^Sol\b\.?\s*/i, "")) : null;
 
       // Options are only looked for where the section says there are options.
