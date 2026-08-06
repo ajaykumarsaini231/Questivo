@@ -792,6 +792,11 @@ async function main() {
           pdfPath: path.join(dir, file),
           outDir: figDir,
           mode: d.kind,
+          // NOT fullWidth. That cuts at the SHEET's edges, which is right for
+          // JEE Advanced's single-column A4 and wrong here: ALLEN sets these
+          // booklets two-up, so a full-width crop of question 51 carried the
+          // whole of question 54 from the right-hand column with it. The
+          // column bounds are what keep a question to its own half of the page.
           wanted: group.map((r) => ({
             // MathonGo numbers 1-90 across the paper; ALLEN restarts at each
             // section, so Section B's "7." is the SECOND time 7 appears.
@@ -818,7 +823,23 @@ async function main() {
             baseName: r.figureBase,
             // A numerical question prints no options; looking for markers in
             // its stem would cut it in half at a stray "(1)".
-            wantOptions: r.questionType === "mcq_single",
+            // One picture per question, with its choices inside it.
+            //
+            // This used to cut a stem and four separate option crops so the
+            // choices could sit beside radio buttons. That was the right shape
+            // when the picture was the ONLY form a question had. It is not any
+            // more: a question whose text extracted cleanly now renders as
+            // text, with its options as text, and the picture is only reached
+            // when the meaning is in the drawing — and there, splitting is
+            // what breaks it. A choice cut at the column edge, a stem stopping
+            // above options no crop captured, four page-wide bands with a
+            // formula in one corner: every one of those came from splitting a
+            // question the paper had already laid out as one block.
+            //
+            // So the paper's own layout is kept, which is what the GATE and
+            // JEE Advanced converters already do. It also means a question is
+            // one file instead of six.
+            wantOptions: false,
             // Only the solution booklets print one.
             wantSolution: d.kind === "allen",
             // What was extracted for this question, so the figure pass can
