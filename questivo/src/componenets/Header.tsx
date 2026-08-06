@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { useAudience } from "./AudienceProvider";
 import type { FeatureId } from "../lib/audience";
-import { SHOW_AI_GENERATOR } from "../lib/featureFlags";
+import { AI_GENERATOR_PATH, useAiGenerator } from "../lib/premium";
 /* ================= TYPES ================= */
 
 interface User {
@@ -43,6 +43,8 @@ type NavLink = {
   /** Hidden unless the visitor's track includes this feature. Links with no
    *  feature are core navigation and are shown to everyone. */
   feature?: FeatureId;
+  /** Hidden unless the API would actually serve this visitor the AI writer. */
+  aiOnly?: boolean;
 };
 
 const NAV_LINKS: NavLink[] = [
@@ -53,8 +55,18 @@ const NAV_LINKS: NavLink[] = [
   // The archive, not the generator: a candidate looking for "previous year
   // questions" wants a specific paper, not a paper assembled to a spec.
   { label: "Previous Year Papers", href: "/pyq", feature: "pyq" },
-  // Retired behind a flag rather than deleted — see lib/featureFlags.ts.
-  ...(SHOW_AI_GENERATOR ? [{ label: "Generate Test", href: "/GenerateTestPage" }] : []),
+  /**
+   * Shown to whoever may actually use it, and to nobody else.
+   *
+   * This used to hang off SHOW_AI_GENERATOR — a constant compiled into the
+   * bundle, which meant the menu could not move without a frontend deploy and
+   * had no way of knowing what the API would allow. It said the feature did not
+   * exist while /api/features said it was for sale and an admin could grant it
+   * to a named account, so the one person who HAD been granted it still could
+   * not find it in the menu. Now the menu reads the same switch as the route
+   * guard and the endpoint.
+   */
+  { label: "Generate Test", href: AI_GENERATOR_PATH, aiOnly: true },
   { label: "Resume ATS Score", href: "/resume_ats_score", feature: "resumeAts" },
   { label: "AI Interview Studio", href: "/interviews", feature: "aiInterview" },
 ];
@@ -88,7 +100,14 @@ const Header: React.FC = () => {
   // been read `can()` returns true for everything, so the prerendered header
   // carries every link and no crawler sees a reduced menu.
   const { can, audience, isAdmin, reopenChoice } = useAudience();
-  const navLinks = NAV_LINKS.filter((l) => !l.feature || can(l.feature));
+  // The AI writer is not a track feature — it is a paid one, and whether this
+  // particular account holds it is the server's answer, not a property of the
+  // exams they sit. Both filters apply to the same list so the menu cannot
+  // offer something either of them would refuse.
+  const aiGenerator = useAiGenerator();
+  const navLinks = NAV_LINKS.filter(
+    (l) => (!l.feature || can(l.feature)) && (!l.aiOnly || aiGenerator.allowed)
+  );
 
   const trackLabel =
     isAdmin && !audience
@@ -341,9 +360,11 @@ const Header: React.FC = () => {
                   Previous Year Papers
                 </Link>
               )}
-              {SHOW_AI_GENERATOR && (
+              {/* Same switch as the desktop nav above — the two menus must not
+                  disagree about what this visitor can have. */}
+              {aiGenerator.allowed && (
                 <a
-                  href="/GenerateTestPage"
+                  href={AI_GENERATOR_PATH}
                   onClick={() => setIsMenuOpen(false)}
                   className="flex items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-slate-600 transition-colors hover:bg-indigo-50 hover:text-indigo-600"
                 >

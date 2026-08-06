@@ -23,6 +23,8 @@
  * survives, the cookie is what the server reads.
  */
 
+import { resetEntitlements } from "./premium";
+
 /**
  * Same key AdminLayout's logout already cleared, so that cleanup keeps meaning
  * what it says rather than becoming a second, stale copy.
@@ -61,6 +63,10 @@ export function writeSessionToken(token: string): void {
     // Quota or a blocked store. The cookie may still carry the session; there
     // is nothing useful to tell the user here.
   }
+  // Somebody different is asking now, and what the API will allow them is not
+  // what it allowed the last person — entitlements can be granted per account.
+  // Outside the try: the store failing does not make the session any less new.
+  resetEntitlements();
 }
 
 export function clearSessionToken(): void {
@@ -69,6 +75,10 @@ export function clearSessionToken(): void {
   } catch {
     /* see writeSessionToken */
   }
+  // Same reason in reverse. Without this a signed-out tab keeps offering the
+  // features the account that just left had been granted, and every one of them
+  // now 402s.
+  resetEntitlements();
 }
 
 /**

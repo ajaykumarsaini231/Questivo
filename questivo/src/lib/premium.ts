@@ -46,6 +46,14 @@ export interface Entitlement {
   premium: boolean;
   /** Shown in the upgrade dialog. A paywall with no reason reads as arbitrary. */
   reason: string;
+  /**
+   * This account has been let through a door that is shut for everyone else.
+   *
+   * Only ever true when the feature is paid site-wide and an admin granted it
+   * to this person, so it is safe to say "included on your account" from it
+   * without saying that to every visitor on a feature that is simply free.
+   */
+  granted?: boolean;
 }
 
 export type FeatureKey = "aiGeneration" | "mockGeneration";
@@ -67,22 +75,70 @@ const OPEN: Entitlements = {
 let cached: Entitlements | null = null;
 let inflight: Promise<Entitlements> | null = null;
 
-/** The switch, fetched once per page load and shared by every caller. */
+/**
+ * Which session the in-flight request belongs to.
+ *
+ * Bumped by every reset, and checked before a reply is allowed to become the
+ * cache. Without it the two requests around a sign-in can land out of order —
+ * the anonymous one issued on page load resolving AFTER the one issued on
+ * login — and the last writer wins, which leaves a freshly signed-in user
+ * holding the signed-out answer until they reload. Exactly the bug the reset
+ * exists to prevent, arrived at from the other direction.
+ */
+let generation = 0;
+
+/** Everything currently mounted that is watching the switch. */
+const listeners = new Set<() => void>();
+
+/**
+ * Forget the cached answer, because the person asking has changed.
+ *
+ * The cache exists so one page load makes one request no matter how many
+ * components read the switch. That was safe while the answer was the same for
+ * everybody; it is not now that an entitlement can be granted per account.
+ * Signing in and out are client-side navigations, so without this a visitor who
+ * signs in keeps the signed-out answer — their granted feature stays hidden
+ * until they reload — and a visitor who signs out keeps the granted one, which
+ * offers them a feature the API will refuse.
+ *
+ * Refetches immediately rather than waiting to be asked, and tells every
+ * mounted `usePremiumGate` to re-read, so the header changes in place instead of
+ * on the next route change.
+ */
+export function resetEntitlements(): void {
+  cached = null;
+  inflight = null;
+  generation += 1;
+  if (typeof window === "undefined") return;
+  void fetchEntitlements().then(() => {
+    for (const notify of listeners) notify();
+  });
+}
+
+/** The switch, fetched once per session and shared by every caller. */
 export function fetchEntitlements(): Promise<Entitlements> {
   if (cached) return Promise.resolve(cached);
   if (inflight) return inflight;
+  // Captured before the request goes out, compared after it comes back. A reply
+  // that belongs to a session the visitor has already left is still returned to
+  // whoever asked for it — they are owed an answer — but it is not written to
+  // the cache, where it would outlive the request that supersedes it.
+  const issuedFor = generation;
   const request: Promise<Entitlements> = fetch(`${API_BASE}/api/features`, {
     credentials: "include",
   })
     .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
     .then((j) => {
       const merged: Entitlements = { ...OPEN, ...(j?.data ?? {}) };
-      cached = merged;
+      if (issuedFor === generation) cached = merged;
       return merged;
     })
     .catch(() => OPEN)
     .finally(() => {
-      inflight = null;
+      // Same guard: a later reset has already cleared `inflight` and started a
+      // fresh request, and clearing it again here would drop that one on the
+      // floor for every caller still waiting on it.
+      if (issuedFor === generation) inflight = null;
     });
   inflight = request;
   return request;
@@ -96,20 +152,28 @@ export function fetchEntitlements(): Promise<Entitlements> {
  */
 export function usePremiumGate(
   feature: FeatureKey
-): { premium: boolean; reason: string; ready: boolean } {
+): { premium: boolean; reason: string; ready: boolean; granted: boolean } {
   const [state, setState] = useState<Entitlement | null>(null);
   useEffect(() => {
     let live = true;
-    fetchEntitlements().then((e) => {
-      if (live) setState(e[feature] ?? OPEN[feature]);
-    });
+    const read = () => {
+      fetchEntitlements().then((e) => {
+        if (live) setState(e[feature] ?? OPEN[feature]);
+      });
+    };
+    read();
+    // Re-read when the session changes under us. Without this the switch is
+    // only ever as fresh as the last full page load — see resetEntitlements.
+    listeners.add(read);
     return () => {
       live = false;
+      listeners.delete(read);
     };
   }, [feature]);
   return {
     premium: Boolean(state?.premium),
     reason: state?.reason ?? "",
+    granted: Boolean(state?.granted),
     /**
      * Whether the server has actually answered.
      *
@@ -120,5 +184,57 @@ export function usePremiumGate(
      * and looks broken doing it. PremiumRoute waits on this instead.
      */
     ready: state !== null,
+  };
+}
+
+/** The AI writer's own route. Gated — PremiumRoute stands in front of it. */
+export const AI_GENERATOR_PATH = "/GenerateTestPage";
+
+/**
+ * The free builder that does very nearly the same job, from previous year
+ * questions. Never gated, and the place every locked CTA should land instead.
+ */
+export const PYQ_BUILDER_PATH = "/pyq/setup";
+
+/**
+ * Where a "generate a paper" call to action should point, for this visitor.
+ *
+ * WHY THIS EXISTS
+ *
+ * Seven places linked at /GenerateTestPage — the header, the homepage hero and
+ * footer, the exam landing page, the exam index, the profile empty state and the
+ * 404 — and every one of them hardcoded it. The header separately hid its entry
+ * behind a compiled-in constant. So the site had three switches that did not
+ * know about each other: the entitlement in the API, the constant in the bundle,
+ * and six links that were never switched at all. The result was a feature hidden
+ * from the navigation while the rest of the site went on advertising it, with
+ * every one of those links dead-ending on a paywall.
+ *
+ * One hook, read by all of them. `path` is the AI writer when the visitor may
+ * have it and the free PYQ builder when they may not, so a locked visitor gets
+ * a paper rather than a wall — the same thing PremiumRoute offers them, offered
+ * one click earlier. `allowed` is for the places that should disappear outright
+ * instead, like the navigation entry.
+ */
+export function useAiGenerator(): {
+  /** The server has answered. Until then, treat the feature as unavailable. */
+  ready: boolean;
+  /** This visitor may use the AI writer. */
+  allowed: boolean;
+  /** Where to send them for a paper, whichever of the two that turns out to be. */
+  path: string;
+  /** Wording that is true of wherever `path` leads. */
+  label: string;
+  /** The server's reason, for a dialog that has to explain the wall. */
+  reason: string;
+} {
+  const gate = usePremiumGate("aiGeneration");
+  const allowed = gate.ready && !gate.premium;
+  return {
+    ready: gate.ready,
+    allowed,
+    path: allowed ? AI_GENERATOR_PATH : PYQ_BUILDER_PATH,
+    label: allowed ? "Generate a mock test" : "Build a practice paper",
+    reason: gate.reason,
   };
 }

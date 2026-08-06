@@ -1,0 +1,8 @@
+# `vercel deploy` uploads this folder as-is, including files git ignores. That
+# is how .env — a file written for a laptop — reached a production build and
+# baked a localhost API origin into the bundle every visitor downloaded.
+#
+# Deployed builds take their variables from the Vercel project settings only.
+.env
+.env.*
+!.env.example

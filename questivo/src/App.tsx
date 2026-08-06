@@ -38,6 +38,12 @@ import ExamsIndexPage from "./pages/ExamsIndexPage";
 // "Loading…" is worth nothing to exactly the AI crawlers this whole prerender
 // step exists for. See the split rule above: prerendered implies eager.
 import PyqPapersPage from "./pages/PyqPapersPage";
+// Geo landing pages. Eager for the reason stated in the split rule above:
+// every one of them is prerendered and indexable, and a lazy route renders its
+// Suspense fallback under renderToString — which would write "Loading…" into
+// the HTML of the ~100 pages this whole section exists to get crawled.
+import CityPracticePage, { CityIndexPage } from "./pages/CityPracticePage";
+import CollegePage, { CollegeIndexPage } from "./pages/CollegePage";
 import NotFoundPage from "./pages/NotFoundPage";
 
 // --- Lazy: never prerendered, and these carry the heavy dependencies ---
@@ -159,15 +165,14 @@ export function AppContent() {
       <Routes>
         {/* ================= PUBLIC ROUTES ================= */}
         <Route path="/" element={<HomePage />} />
-        {/* Still live, just no longer promoted in the nav — it is the second
-            option under "Generate a paper" on the previous year papers page.
-            See lib/featureFlags.ts. */}
-        {/* The AI writer. Behind the operator's switch, not a frontend
-            constant: PREMIUM_AI_GENERATION in the API's environment moves this
-            route, the menu entry, the badge and the endpoint together. While it
-            is off the page never renders its form — it points at the free
-            PYQ-backed builder at /pyq/setup instead, which is a paper the
-            visitor can actually have. */}
+        {/* The AI writer. Behind the server's switch, not a frontend constant:
+            PREMIUM_AI_GENERATION in the API's environment moves this route, the
+            menu entry, the badge, every "generate a paper" call to action and
+            the endpoint together — and a per-account grant made from Admin →
+            Users moves all of the same things for one person. While it is shut
+            the page never renders its form; it points at the free PYQ-backed
+            builder at /pyq/setup instead, which is a paper the visitor can
+            actually have. See lib/premium.ts. */}
         <Route
           path="/GenerateTestPage"
           element={
@@ -191,6 +196,16 @@ export function AppContent() {
         />
         <Route path="/exams" element={<ExamsIndexPage />} />
         <Route path="/mock-test/:slug" element={<ExamLandingPage />} />
+
+        {/* ================= GEO LANDING PAGES =================
+            Two hubs and their children. Index routes are declared first so
+            "/practice" is never taken for a city slug, the same ordering rule
+            /pyq/setup follows below. Data and the doorway-page reasoning live
+            in lib/geo.ts; the SEO entries are generated in lib/seo.ts. */}
+        <Route path="/practice" element={<CityIndexPage />} />
+        <Route path="/practice/:citySlug" element={<CityPracticePage />} />
+        <Route path="/college" element={<CollegeIndexPage />} />
+        <Route path="/college/:collegeSlug" element={<CollegePage />} />
 
         {/* ================= PREVIOUS YEAR PAPERS =================
             Separate from the generator flow above on purpose. A PYQ is one

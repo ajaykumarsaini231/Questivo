@@ -1,6 +1,6 @@
 import express from "express";
 import rateLimit from "express-rate-limit";
-import optionalAuth from "../middleware/optionalAuth.js";
+import optionalAuth, { optionalUser } from "../middleware/optionalAuth.js";
 import {
   getPyqCoverage,
   getPyqTopics,
@@ -96,7 +96,7 @@ router.get("/papers/:paperId", getPyqPaper);
 // middleware req.userId was never populated, so every attempt was scored
 // anonymously and the candidate's profile read "0 tests attempted" no matter
 // how many papers they sat.
-router.post("/papers/:paperId/score", optionalAuth, scorePyqPaper);
+router.post("/papers/:paperId/score", optionalUser, scorePyqPaper);
 
 // A fresh paper drawn from the question bank, and its scorer. Declared before
 // "/:id/solution" for the same reason as the routes above.
@@ -112,12 +112,12 @@ router.get("/full-tests", listFullTests);
 router.post("/generate", generateLimiter, generateMockPaper);
 // optionalAuth for the same reason as the paper scorer: a signed-in candidate's
 // generated paper lands in their history, an anonymous one is still scored.
-router.post("/practice/score", optionalAuth, scoreQuestionSet);
+router.post("/practice/score", optionalUser, scoreQuestionSet);
 
 router.get("/", listPyqs);
 router.get("/:id/solution", solutionLimiter, getPyqSolution);
 
-router.post("/course-request", requestLimiter, optionalAuth, createCourseRequest);
+router.post("/course-request", requestLimiter, optionalUser, createCourseRequest);
 router.get("/course-request", listCourseRequests);
 
 export default router;

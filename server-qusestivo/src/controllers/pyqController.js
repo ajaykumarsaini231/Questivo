@@ -1,4 +1,6 @@
 import prisma from "../prismaClient.js";
+import { isAdminRequest } from "../lib/adminAccess.js";
+import { courseRequestSchema } from "../middleware/validator.js";
 import { chat, ROLES } from "../lib/aiClient.js";
 import { PYQ_EXAMS, resolvePyqExamCode, profileToBrief } from "../lib/pyqPattern.js";
 import { buildPyqProfile } from "../lib/pyqProfile.js";
@@ -257,8 +259,11 @@ export const listPyqPapers = async (req, res) => {
     }
     if (req.query.year) where.year = Number(req.query.year);
 
-    // Admins previewing before release. Same token gate as listCourseRequests.
-    if (process.env.Secret_Token && req.headers["x-admin-token"] === process.env.Secret_Token) {
+    // Admins previewing before release. The gate used to compare a header
+    // against Secret_Token — the JWT signing key — which meant the credential
+    // for "show me drafts" was also the credential for "mint a session as
+    // anyone". See lib/adminAccess.js.
+    if (await isAdminRequest(req)) {
       delete where.isPublished;
     }
 
@@ -362,8 +367,9 @@ export const getPyqPaper = async (req, res) => {
     const paper = await prisma.pyqPaper.findUnique({ where: { id: req.params.paperId } });
     if (!paper) return res.status(404).json({ error: "Paper not found" });
 
-    const isAdmin =
-      process.env.Secret_Token && req.headers["x-admin-token"] === process.env.Secret_Token;
+    // Only checked when it can change the answer: an unpublished paper is the
+    // one case where admin status matters here, and the check costs a lookup.
+    const isAdmin = paper.isPublished ? false : await isAdminRequest(req);
     if (!paper.isPublished && !isAdmin) {
       return res.status(404).json({ error: "This paper is not published yet" });
     }
@@ -1331,8 +1337,13 @@ export const getPyqPattern = async (req, res) => {
 
 export const createCourseRequest = async (req, res) => {
   try {
-    const examName = String(req.body.examName || "").trim();
-    if (examName.length < 2) return res.status(400).json({ error: "Please name the exam" });
+    // Bounded and typed before anything is written. See courseRequestSchema for
+    // what was going in before, and why an unauthenticated write endpoint with
+    // no maximum length is worth closing even behind a rate limit.
+    const { value, error } = courseRequestSchema.validate(req.body ?? {});
+    if (error) return res.status(400).json({ error: error.details[0].message });
+
+    const examName = value.examName;
 
     const existing = await prisma.courseRequest.findFirst({
       where: { examName: { equals: examName, mode: "insensitive" }, status: "open" },
@@ -1345,8 +1356,8 @@ export const createCourseRequest = async (req, res) => {
       : await prisma.courseRequest.create({
           data: {
             examName,
-            email: req.body.email || null,
-            note: req.body.note || null,
+            email: value.email || null,
+            note: value.note || null,
             userId: req.userId || null,
           },
         });
@@ -1358,8 +1369,11 @@ export const createCourseRequest = async (req, res) => {
 };
 
 export const listCourseRequests = async (req, res) => {
-  if (!process.env.Secret_Token || req.headers["x-admin-token"] !== process.env.Secret_Token) {
-    return res.status(401).json({ error: "unauthorized" });
+  // These rows carry the email addresses and free-text notes visitors typed
+  // into the request form, so the gate matters. It is no longer the JWT signing
+  // key — see lib/adminAccess.js.
+  if (!(await isAdminRequest(req))) {
+    return res.status(401).json({ success: false, error: "unauthorized" });
   }
   const rows = await prisma.courseRequest.findMany({ orderBy: [{ votes: "desc" }, { createdAt: "desc" }], take: 200 });
   res.json({ success: true, data: rows });

@@ -1,13 +1,15 @@
 import express from "express";
+import crypto from "crypto";
 import { google } from "googleapis";
+import { hasAdminToken } from "../lib/adminAccess.js";
 
 /**
  * In-app Gmail OAuth setup, ported from the METNMAT dashboard
  * (app/api/gmail/setup/route.ts + app/oauth2callback/route.ts).
  *
- *   GET /api/gmail/setup?token=<Secret_Token>   -> redirects to Google consent
- *   GET /oauth2callback                         -> exchanges the code, shows the
- *                                                  refresh token to copy
+ *   GET /api/gmail/setup?token=<ADMIN_API_TOKEN> -> redirects to Google consent
+ *   GET /oauth2callback                          -> exchanges the code, shows the
+ *                                                   refresh token to copy
  *
  * WHY THIS AND NOT A LOCAL CLI SCRIPT
  * Every failure so far came from the token being minted somewhere other than
@@ -45,17 +47,60 @@ const SCOPES = [
  * to exchange the code by hand.
  */
 function requireSecret(req, res) {
-  const expected = process.env.Secret_Token;
-  const supplied = req.query.token || req.query.state || req.headers["x-admin-token"];
-  if (!expected) {
-    res.status(500).send(page("Not configured", "<p>Set <code>Secret_Token</code> in the environment first.</p>"));
+  if (!process.env.ADMIN_API_TOKEN) {
+    res.status(500).send(page("Not configured", "<p>Set <code>ADMIN_API_TOKEN</code> in the environment first.</p>"));
     return false;
   }
-  if (supplied !== expected) {
-    res.status(401).send(page("Unauthorized", "<p>Append <code>?token=&lt;Secret_Token&gt;</code> to the URL.</p>"));
+  // The query parameter is accepted because this is a URL an operator opens in
+  // a browser, and a browser cannot be made to send a custom header. It is now
+  // ADMIN_API_TOKEN rather than Secret_Token, so what ends up in the proxy
+  // access logs is a token that grants these two setup pages — not the key that
+  // signs every session on the site.
+  const supplied = req.headers["x-admin-token"] || req.query.token;
+  if (!hasAdminToken({ headers: { "x-admin-token": supplied } })) {
+    res.status(401).send(page("Unauthorized", "<p>Append <code>?token=&lt;ADMIN_API_TOKEN&gt;</code> to the URL.</p>"));
     return false;
   }
   return true;
+}
+
+/**
+ * Prove the callback belongs to a setup flow we started, without sending a
+ * secret to Google.
+ *
+ * `state` used to be `process.env.Secret_Token` verbatim. Google round-trips
+ * that value, which is what made it work — and it is also what put the JWT
+ * signing key into the consent URL, the operator's browser history, Google's
+ * own logs, and any Referer the consent page emitted.
+ *
+ * What Google actually needs to carry is a value only this server could have
+ * produced and that expires. So: a timestamp plus an HMAC of it under
+ * ADMIN_API_TOKEN. Nothing secret crosses the wire, it cannot be forged without
+ * the token, it is useless after ten minutes, and — unlike a nonce kept in a
+ * Map — it verifies on whichever instance Google happens to hit.
+ */
+function mintState() {
+  const expiry = String(Date.now() + 10 * 60 * 1000);
+  const mac = crypto
+    .createHmac("sha256", process.env.ADMIN_API_TOKEN)
+    .update(expiry)
+    .digest("hex");
+  return `${expiry}.${mac}`;
+}
+
+function stateIsValid(state) {
+  if (!process.env.ADMIN_API_TOKEN || typeof state !== "string") return false;
+  const [expiry, mac] = state.split(".");
+  if (!expiry || !mac) return false;
+  if (!/^\d+$/.test(expiry) || Number(expiry) < Date.now()) return false;
+  const expected = crypto
+    .createHmac("sha256", process.env.ADMIN_API_TOKEN)
+    .update(expiry)
+    .digest("hex");
+  const a = Buffer.from(mac);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
 }
 
 function redirectUri() {
@@ -95,8 +140,8 @@ router.get("/api/gmail/setup", (req, res) => {
     prompt: "consent",
     include_granted_scopes: true,
     scope: SCOPES,
-    // Carries the gate secret through Google and back to /oauth2callback.
-    state: process.env.Secret_Token,
+    // A signed, expiring marker — never the secret itself. See mintState.
+    state: mintState(),
     ...(hint ? { login_hint: hint } : {}),
   });
 
@@ -106,11 +151,33 @@ router.get("/api/gmail/setup", (req, res) => {
 /* -------------------------------- callback ------------------------------ */
 
 router.get("/oauth2callback", async (req, res) => {
-  if (!requireSecret(req, res)) return;
+  /**
+   * Google invokes this, so it cannot present the admin token — it can only
+   * return the `state` we handed it. That marker is what authorises the
+   * callback: it proves the flow started here and has not expired.
+   */
+  if (!stateIsValid(req.query.state)) {
+    return res
+      .status(401)
+      .send(
+        page(
+          "Unauthorized",
+          "<p>This callback did not come from a setup flow started on this server, or it expired. Start again at <code>/api/gmail/setup?token=&lt;ADMIN_API_TOKEN&gt;</code>.</p>"
+        )
+      );
+  }
 
   const { code, error } = req.query;
-  const secret = req.query.token || req.query.state || "";
-  const retry = `/api/gmail/setup?token=${encodeURIComponent(secret)}`;
+  /**
+   * The retry link carries no secret.
+   *
+   * It used to be built from `req.query.token || req.query.state` — which, on
+   * the callback, meant the value Google had just round-tripped. Reflecting a
+   * credential into an anchor on an error page puts it in the DOM, in the
+   * browser history, and in the Referer of anything that page loads. The
+   * operator has the token; they can re-append it.
+   */
+  const retry = "/api/gmail/setup";
 
   if (error) return res.send(page("Authorisation denied", `<p>Google returned: <strong>${esc(String(error))}</strong></p><p><a href="${retry}">Try again</a></p>`));
   if (!code) return res.send(page("Missing code", `<p>No <code>code</code> in the URL. Start at <a href="${retry}">Connect Gmail</a>.</p>`));

@@ -2,6 +2,7 @@ import React from "react";
 import { Link } from "react-router-dom";
 import { Search, ChevronRight } from "lucide-react";
 import { EXAMS, examPath } from "../lib/exams";
+import { useAiGenerator } from "../lib/premium";
 
 /**
  * Real 404 page.
@@ -12,7 +13,13 @@ import { EXAMS, examPath } from "../lib/exams";
  * noindex in lib/seo.ts and, more usefully, sends the visitor somewhere real
  * instead of dumping them on the homepage with no explanation.
  */
-const NotFoundPage: React.FC = () => (
+const NotFoundPage: React.FC = () => {
+  // The primary way out of a dead URL cannot itself be a dead end. Sending a
+  // visitor who has already hit one wall straight into a paywall is the worst
+  // version of this page, so the button follows what they may actually have.
+  const generator = useAiGenerator();
+
+  return (
   <div className="min-h-screen bg-slate-50">
     <main className="shell py-16 text-center">
       <p className="text-sm font-semibold uppercase tracking-wider text-indigo-600">
@@ -28,10 +35,10 @@ const NotFoundPage: React.FC = () => (
 
       <div className="mt-10 flex flex-col justify-center gap-3 sm:flex-row">
         <Link
-          to="/GenerateTestPage"
+          to={generator.path}
           className="btn btn-primary btn-lg"
         >
-          Generate a mock test <ChevronRight className="ml-2 h-4 w-4" />
+          {generator.label} <ChevronRight className="ml-2 h-4 w-4" />
         </Link>
         <Link
           to="/resume_ats_score"
@@ -71,6 +78,7 @@ const NotFoundPage: React.FC = () => (
       </p>
     </main>
   </div>
-);
+  );
+};
 
 export default NotFoundPage;

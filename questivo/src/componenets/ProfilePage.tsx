@@ -10,6 +10,7 @@ import {
 import { motion } from 'framer-motion';
 import toast, { Toaster } from 'react-hot-toast';
 import PremiumDialog from './PremiumDialog';
+import { useAiGenerator } from '../lib/premium';
 import { useAudience } from './AudienceProvider';
 import { examsForAudience, getAudience, type AudienceId } from '../lib/audience';
 import {
@@ -880,6 +881,10 @@ const EmptyState = ({
   navigate: any;
   onPremium: () => void;
 }) => {
+  // An empty state's whole job is the button. Sending someone who has never sat
+  // a test to a paywall is the one outcome worse than the empty list.
+  const generator = useAiGenerator();
+
   const copy = {
     pyq: {
       title: 'No previous year papers sat yet',
@@ -890,8 +895,8 @@ const EmptyState = ({
     mock: {
       title: 'No mock tests yet',
       body: 'Build a paper around your own exam, topics, difficulty and question count.',
-      cta: 'Create a mock test',
-      action: () => navigate('/GenerateTestPage'),
+      cta: generator.allowed ? 'Create a mock test' : 'Build a practice paper',
+      action: () => navigate(generator.path),
     },
     generated: {
       title: 'No generated mock tests yet',

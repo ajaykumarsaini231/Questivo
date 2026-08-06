@@ -1,5 +1,37 @@
 import bcrypt from "bcryptjs";
-import prisma from "../prismaClient.js"; 
+import prisma from "../prismaClient.js";
+import { sanitizeSvg } from "../lib/sanitizeSvg.js";
+import { FEATURE_KEYS, isFeatureKey } from "../lib/entitlements.js";
+
+/**
+ * Run any diagram in `data` through the SVG allow-list before it is stored.
+ *
+ * sanitizeSvg was written for model-generated diagrams and called from exactly
+ * one place — questionGenerator.js — on the assumption that the model was the
+ * only author of markup. It was not. `diagramSvg` is an editable field on this
+ * endpoint, and four components render it with dangerouslySetInnerHTML
+ * (PyqResultView, PyqSection, TestPage, PyqPaperRunner), so anything written
+ * here executes in every reader's browser on the site's own origin.
+ *
+ * "Admins are trusted" is the wrong frame. It makes an admin session worth
+ * stealing for the XSS it grants over every user, and it makes an
+ * administrative mistake — pasting a figure from an unknown source — into a
+ * site-wide compromise. The sanitiser is cheap and already written; the only
+ * reason it was not applied to this path is that nobody joined the two facts.
+ *
+ * A diagram that does not survive sanitising is rejected rather than silently
+ * blanked, so an admin finds out at the moment they save instead of discovering
+ * an empty figure in a live paper.
+ */
+const sanitizeDiagram = (data) => {
+  if (typeof data.diagramSvg !== "string" || !data.diagramSvg.trim()) return null;
+  const clean = sanitizeSvg(data.diagramSvg);
+  if (!clean) {
+    return "That diagram could not be accepted: it is not a plain SVG drawing, or it contains scripts, event handlers or external references.";
+  }
+  data.diagramSvg = clean;
+  return null;
+};
 
 
 
@@ -124,10 +156,19 @@ export const getAllUsers = async (req, res) => {
       skip: parseInt(skip),
       take: parseInt(limit),
       orderBy: { createdAt: 'desc' },
-      select: { 
+      select: {
         // SECURITY: Only select safe fields
-        id: true, name: true, email: true, role: true, 
+        id: true, name: true, email: true, role: true,
         isVerified: true, createdAt: true, phone: true,
+        // Drives the AI Access toggle in the table. Sent for every row so the
+        // switch renders in its true position on first paint rather than
+        // flicking across once a second request lands.
+        entitlements: true,
+        // The table renders these three and the edit modal loads its form from
+        // the same row, so leaving them out of the select was not merely a blank
+        // column: opening Edit read `bio` as undefined, the form defaulted it to
+        // "", and saving wrote that empty string back over whatever was there.
+        authProvider: true, preferredMedium: true, bio: true,
         _count: { select: { sessions: true } } // Show how many tests they took
       }
     });
@@ -222,6 +263,81 @@ export const updateUser = async (req, res) => {
     res.json({ success: true, data: user });
   } catch (error) {
     res.status(400).json({ success: false, error: "Update failed. ID might be invalid." });
+  }
+};
+
+/**
+ * Grant or revoke one paid feature for one account.
+ *
+ * WHY THIS IS ITS OWN ENDPOINT AND NOT A FIELD ON THE EDIT FORM
+ *
+ * `entitlements` is deliberately absent from USER_EDITABLE_FIELDS above. The
+ * edit form sends the whole object every time it is saved, so a list-valued
+ * field on it would be rewritten wholesale by anyone who opened the form and
+ * pressed Save — including by an older browser tab holding a stale copy, which
+ * would silently revoke a grant made in the meantime. This endpoint changes one
+ * key at a time and leaves the rest of the list where it was.
+ *
+ * It is also the action worth being able to find later. Granting metered
+ * generation is a spending decision, so it is logged with who did it, and it is
+ * a separate line in the audit trail rather than one field of a routine profile
+ * edit.
+ *
+ * Available to `admin` as well as `superadmin`, matching every other route on
+ * this router — a second, stricter rule here would be invisible until an admin
+ * pressed the switch and it did nothing.
+ *
+ * Body: { feature: "aiGeneration", granted: true }
+ */
+export const setUserEntitlement = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { feature, granted } = req.body ?? {};
+
+    // An unknown key would be written happily by Postgres and then ignored by
+    // every reader, so the admin would see a switch that saved and did nothing.
+    if (!isFeatureKey(feature)) {
+      return res.status(400).json({
+        success: false,
+        error: `Unknown feature. Expected one of: ${FEATURE_KEYS.join(", ")}`,
+      });
+    }
+    // Not truthiness: `granted: "false"` from a hand-rolled request would
+    // otherwise grant the feature, which is the wrong way for this to fail.
+    if (typeof granted !== "boolean") {
+      return res.status(400).json({ success: false, error: "`granted` must be true or false" });
+    }
+
+    const target = await prisma.user.findUnique({
+      where: { id },
+      select: { id: true, entitlements: true },
+    });
+    if (!target) return res.status(404).json({ success: false, error: "User not found" });
+
+    const held = new Set(target.entitlements ?? []);
+    if (granted) held.add(feature);
+    else held.delete(feature);
+
+    // Rebuild from FEATURE_KEYS rather than spreading the set: it fixes the
+    // order, removes duplicates, and drops any key that has since been retired,
+    // so the column cannot drift into holding things nothing reads.
+    const next = FEATURE_KEYS.filter((key) => held.has(key));
+
+    const user = await prisma.user.update({
+      where: { id },
+      data: { entitlements: next },
+      select: { id: true, name: true, email: true, entitlements: true },
+    });
+
+    console.log(
+      `[admin] ${req.user?.id} ${granted ? "granted" : "revoked"} "${feature}" ` +
+        `${granted ? "to" : "from"} user ${id}`
+    );
+
+    res.json({ success: true, data: user });
+  } catch (error) {
+    console.error("Set User Entitlement Error:", error);
+    res.status(500).json({ success: false, error: "Could not update access" });
   }
 };
 
@@ -468,6 +584,8 @@ export const updateQuestion = async (req, res) => {
     if (!Object.keys(data).length) {
       return res.status(400).json({ success: false, error: "No editable fields supplied" });
     }
+    const rejected = sanitizeDiagram(data);
+    if (rejected) return res.status(400).json({ success: false, error: rejected });
     const question = await prisma.testQuestion.update({ where: { id }, data });
     res.json({ success: true, data: question });
   } catch (e) {

@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import axios from "axios";
 import prisma from "../prismaClient.js";
@@ -5,11 +6,17 @@ import prisma from "../prismaClient.js";
 import {
   signupSchema,
   signinSchema,
+  passwordStrengthSchema,
 } from "../middleware/validator.js";
 
 import { doHash, dohashValidation, hmacProcess } from "../utills/hashing.js";
 import { transport } from "../middleware/sendmail.js";
-import { guardOtpSend, OTP_PURPOSES } from "../lib/otpThrottle.js";
+import {
+  guardOtpSend,
+  guardOtpVerify,
+  clearOtpAttempts,
+  OTP_PURPOSES,
+} from "../lib/otpThrottle.js";
 import { readSessionToken } from "../lib/sessionToken.js";
 
 /**
@@ -40,10 +47,83 @@ if (!OTP_SECRET) {
 const signJwt = (payload) =>
   jwt.sign(payload, process.env.Secret_Token, { expiresIn: "7d" });
 
+/**
+ * Mint a six-digit code.
+ *
+ * crypto.randomInt, not Math.random. Math.random is a fast non-cryptographic
+ * PRNG — in V8 an xorshift128+ whose internal state can be reconstructed from a
+ * short run of its outputs, after which every future value is known. That is a
+ * lab attack rather than a drive-by, but the whole security of this code is
+ * that it cannot be predicted, and there is no reason to defend a guess when
+ * the CSPRNG is one import away and costs microseconds.
+ *
+ * The range is [100000, 1000000) so every code is exactly six digits — a
+ * leading zero would render as a five-digit code in the email and be typed back
+ * as one.
+ */
+const mintOtp = () => String(crypto.randomInt(100000, 1000000));
+
+/**
+ * Failed password sign-ins are counted in the same place as failed codes.
+ *
+ * It is not an OTP purpose, but it is the same measurement — "how many wrong
+ * credentials has this account been shown" — and it wants the same per-account
+ * bucket rather than a per-IP one, for the same reason: guesses spread across
+ * addresses defeat an IP limit, and this audience shares addresses behind
+ * carrier-grade NAT by the thousand. Its own key so a password lockout cannot
+ * stop the owner from using the OTP route to get back in.
+ */
+const PASSWORD_PURPOSE = "PASSWORD";
+
+/** Passwords get a longer leash than codes: people genuinely misremember them. */
+const PASSWORD_MAX_ATTEMPTS = Number(process.env.PASSWORD_MAX_ATTEMPTS) || 10;
+
+/**
+ * Compare two HMAC digests without letting the comparison time say how much of
+ * the prefix matched.
+ *
+ * `a !== b` on strings stops at the first differing byte. Over the public
+ * internet that difference is buried in jitter and this is close to
+ * theoretical — but it is one call to make it unconditionally true instead of
+ * probably-fine, and these are the digests standing between a guess and an
+ * account.
+ *
+ * Lengths are compared first because timingSafeEqual throws on a mismatch, and
+ * a thrown comparison is a failed sign-in with a 500 instead of a 400.
+ */
+const digestsMatch = (a, b) => {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  const left = Buffer.from(a);
+  const right = Buffer.from(b);
+  if (left.length !== right.length) return false;
+  return crypto.timingSafeEqual(left, right);
+};
+
 const COOKIE_OPTS = {
   httpOnly: true,
-  secure: true,          // MUST (https)
-  sameSite: "None",      // MUST (cross-site)
+  secure: true, // MUST (https)
+  /**
+   * Lax, not None.
+   *
+   * None was needed while the frontend was built against an absolute API origin
+   * — the page and the API were different sites, so the session cookie was a
+   * cross-site cookie and Lax would never have been sent. That is no longer the
+   * arrangement: apiBase.ts resolves to an empty base and vercel.json rewrites
+   * /api through to this server, so the cookie is first-party on every hostname
+   * the site answers on.
+   *
+   * The reason to change it is CSRF. This API parses urlencoded bodies, which
+   * means a form on any website can POST to it with no preflight to stop it; a
+   * SameSite=None cookie rides along on that request and the action executes.
+   * There is no CSRF token here to catch it. Lax is the fix: the browser simply
+   * does not attach this cookie to a cross-site POST, which closes the whole
+   * class without a token anywhere.
+   *
+   * If an absolute API origin is ever reintroduced, this has to go back to None
+   * AND a CSRF token has to appear — the two are a pair, and it was the missing
+   * half of that pair that made this exploitable.
+   */
+  sameSite: "Lax",
   path: "/",
   maxAge: 7 * 24 * 60 * 60 * 1000,
 };
@@ -91,7 +171,6 @@ export const signup = async (req, res) => {
     if (error) return res.status(400).json({ message: error.details[0].message });
 
     const exists = await prisma.user.findUnique({ where: { email } });
-    if (exists) return res.status(400).json({ message: "User already exists" });
 
     // Throttled BEFORE the pending row is touched. Checking afterwards would
     // let a refused request still wipe the pending signup the caller already
@@ -99,9 +178,60 @@ export const signup = async (req, res) => {
     // the attacker.
     if (!(await guardOtpSend(req, res, { identifier: email, purpose: OTP_PURPOSES.SIGNUP }))) return;
 
+    /**
+     * An address that already has an account gets the same answer as one that
+     * does not, and hears about it by email instead.
+     *
+     * "User already exists" told anyone who asked whether a given address is
+     * registered here, one request at a time, with no account of their own —
+     * a membership list for any mailing list, breach dump or guess someone
+     * cares to feed it. Paired with the 404s the OTP endpoints used to return,
+     * the whole user base was enumerable.
+     *
+     * The mail is not a consolation prize for the UX cost. It is the useful
+     * half: the real owner learns that someone tried to register their address
+     * and is pointed at the route that actually works, while the person who
+     * typed it learns nothing about who is registered.
+     */
+    if (exists) {
+      await transport.sendMail({
+        to: email,
+        subject: "You already have a Questivo account",
+        html: `
+    <div style="max-width:600px;margin:0 auto;font-family:Arial,Helvetica,sans-serif;background:#ffffff;border-radius:8px;border:1px solid #e5e7eb;padding:24px;">
+      <div style="text-align:center;margin-bottom:20px;">
+        <h1 style="color:#4f46e5;margin:0;">Questivo</h1>
+        <p style="color:#6b7280;font-size:14px;margin-top:4px;">Smart Practice. Real Results.</p>
+      </div>
+      <p style="font-size:15px;color:#374151;line-height:1.6;">
+        Someone just tried to create a Questivo account with this email address,
+        but you already have one.
+      </p>
+      <p style="font-size:15px;color:#374151;line-height:1.6;">
+        You can <strong>sign in</strong> with your password, or use the
+        <strong>"Sign in with OTP"</strong> option if you would rather not
+        remember one. If you have forgotten your password, use
+        <strong>"Forgot password"</strong> on the sign-in page to set a new one.
+      </p>
+      <p style="font-size:14px;color:#6b7280;line-height:1.6;">
+        If this was not you, no action is needed — your account has not changed
+        and no one has been given access to it.
+      </p>
+      <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0;">
+      <p style="font-size:12px;color:#6b7280;text-align:center;">
+        © ${new Date().getFullYear()} Questivo. All rights reserved.<br/>
+        This is an automated message. Please do not reply.
+      </p>
+    </div>
+  `,
+      });
+
+      return res.json({ success: true, message: "OTP sent" });
+    }
+
     await prisma.pendingUser.deleteMany({ where: { email } });
 
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otp = mintOtp();
 
     await prisma.pendingUser.create({
       data: {
@@ -179,15 +309,37 @@ export const verifySignupOtp = async (req, res) => {
   try {
     const { email, otp } = req.body;
 
+    // Every guess is charged against this address before it is checked. Without
+    // it a six-digit code with a five-minute life is a million tries at
+    // whatever rate the network allows — see consumeOtpAttempt.
+    if (!(await guardOtpVerify(req, res, { identifier: email, purpose: OTP_PURPOSES.SIGNUP }))) return;
+
     const pending = await prisma.pendingUser.findUnique({ where: { email } });
-    if (!pending || pending.otpExpiry < new Date())
+
+    /**
+     * `pending.otpExpiresAt`, not `pending.otpExpiry`.
+     *
+     * The column is otpExpiresAt — that is the name the schema declares, the
+     * name signup writes, and the name the login and reset paths read. This one
+     * line read a field that does not exist, so the comparison was
+     * `undefined < new Date()`, which is false for every date there has ever
+     * been. The expiry check was not lenient; it never ran at all, and signup
+     * codes stayed valid forever. Combined with there being no attempt limit,
+     * every pending signup was a code an attacker had unlimited time and
+     * unlimited tries to find.
+     */
+    if (!pending || !pending.otpExpiresAt || pending.otpExpiresAt < new Date())
       return res.status(400).json({ message: "OTP invalid or expired" });
 
     if (
-      pending.otpHash !==
-      hmacProcess(otp, process.env.HMAC_VARIFICATION_CODE_SECRET)
+      !digestsMatch(
+        pending.otpHash,
+        hmacProcess(String(otp ?? ""), process.env.HMAC_VARIFICATION_CODE_SECRET)
+      )
     )
       return res.status(400).json({ message: "OTP invalid" });
+
+    await clearOtpAttempts({ identifier: email, purpose: OTP_PURPOSES.SIGNUP });
 
     const user = await prisma.user.create({
       data: {
@@ -218,12 +370,27 @@ export const signin = async (req, res) => {
     const { error } = signinSchema.validate({ email, password });
     if (error) return res.status(400).json({ message: error.details[0].message });
 
+    // Nothing stood in front of this before: /signin accepted guesses at
+    // whatever rate a script could send them, forever. The per-IP limiter now
+    // mounted on the router stops one loud source; this stops a quiet one
+    // spread across many, which is the attack that actually works.
+    if (
+      !(await guardOtpVerify(req, res, {
+        identifier: email,
+        purpose: PASSWORD_PURPOSE,
+        max: PASSWORD_MAX_ATTEMPTS,
+      }))
+    )
+      return;
+
     const user = await prisma.user.findUnique({ where: { email } });
     if (!user || !user.passwordHash)
       return res.status(401).json({ message: "Invalid credentials" });
 
     const ok = await dohashValidation(password, user.passwordHash);
     if (!ok) return res.status(401).json({ message: "Invalid credentials" });
+
+    await clearOtpAttempts({ identifier: email, purpose: PASSWORD_PURPOSE });
 
     return grantSession(res, user);
   } catch (err) {
@@ -247,9 +414,18 @@ export const sendLoginOtp = async (req, res) => {
     if (!(await guardOtpSend(req, res, { identifier: email, purpose: OTP_PURPOSES.LOGIN }))) return;
 
     const user = await prisma.user.findUnique({ where: { email } });
-    if (!user) return res.status(404).json({ message: "User not found" });
+    /**
+     * Same answer whether or not the account exists.
+     *
+     * The 404 that stood here was a free membership oracle — one request per
+     * address, no account needed, and the comment above already noted the leak
+     * was enumerable in bulk. Someone who typed their address wrong sees "code
+     * sent" and no code arrives, which is the same thing they would see if the
+     * mail were delayed; someone probing the user base learns nothing at all.
+     */
+    if (!user) return res.json({ success: true });
 
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otp = mintOtp();
 
     await prisma.user.update({
       where: { email },
@@ -316,16 +492,20 @@ export const verifyLoginOtp = async (req, res) => {
   try {
     const { email, otp } = req.body;
 
+    if (!(await guardOtpVerify(req, res, { identifier: email, purpose: OTP_PURPOSES.LOGIN }))) return;
+
     const user = await prisma.user.findUnique({ where: { email } });
     if (!user || user.otpPurpose !== "LOGIN")
       return res.status(400).json({ message: "Invalid request" });
 
-    if (user.otpExpiresAt < new Date())
+    if (!user.otpExpiresAt || user.otpExpiresAt < new Date())
       return res.status(400).json({ message: "OTP expired" });
 
     if (
-      user.otpHash !==
-      hmacProcess(otp, process.env.HMAC_VARIFICATION_CODE_SECRET)
+      !digestsMatch(
+        user.otpHash,
+        hmacProcess(String(otp ?? ""), process.env.HMAC_VARIFICATION_CODE_SECRET)
+      )
     )
       return res.status(400).json({ message: "Invalid OTP" });
 
@@ -333,6 +513,8 @@ export const verifyLoginOtp = async (req, res) => {
       where: { email },
       data: { otpHash: null, otpExpiresAt: null, otpPurpose: null },
     });
+
+    await clearOtpAttempts({ identifier: email, purpose: OTP_PURPOSES.LOGIN });
 
     return grantSession(res, user);
   } catch (err) {
@@ -355,9 +537,12 @@ export const sendResetOtp = async (req, res) => {
     if (!(await guardOtpSend(req, res, { identifier: email, purpose: OTP_PURPOSES.RESET_PASSWORD }))) return;
 
     const user = await prisma.user.findUnique({ where: { email } });
-    if (!user) return res.status(404).json({ message: "User not found" });
+    // Generic, for the reason spelled out in sendLoginOtp. A password-reset
+    // form that answers "no such user" is the same membership oracle, and it is
+    // the one an attacker reaches for first because it needs no account.
+    if (!user) return res.json({ success: true });
 
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otp = mintOtp();
     await prisma.user.update({
       where: { email },
       data: {
@@ -451,10 +636,27 @@ export const verifyResetOtp = async (req, res) => {
     email = email.trim().toLowerCase();
     otp = otp.toString();
 
+    /**
+     * Strength is checked here, before anything else touches the account.
+     *
+     * This endpoint used to hash whatever arrived and store it, so the rule
+     * signupSchema enforces could be bypassed entirely by resetting instead of
+     * signing up. The user who did that then could not sign in either, because
+     * signinSchema applies the same pattern to the password being submitted —
+     * so the gap did not just weaken the rule, it was a way to lock yourself
+     * out of your own account.
+     */
+    const weak = passwordStrengthSchema.validate({ password: newPassword }).error;
+    if (weak) return res.status(400).json({ message: weak.details[0].message });
+
+    if (!(await guardOtpVerify(req, res, { identifier: email, purpose: OTP_PURPOSES.RESET_PASSWORD }))) return;
+
     const user = await prisma.user.findUnique({ where: { email } });
 
+    // "User not found" here named an address that has no account, same as the
+    // send endpoint used to. Every failure on this path now reads the same.
     if (!user) {
-      return res.status(400).json({ message: "User not found" });
+      return res.status(400).json({ message: "Invalid or expired code" });
     }
 
     if (user.otpPurpose !== "RESET_PASSWORD") {
@@ -470,7 +672,7 @@ export const verifyResetOtp = async (req, res) => {
       process.env.HMAC_VARIFICATION_CODE_SECRET
     );
 
-    if (user.otpHash !== hashedOtp) {
+    if (!digestsMatch(user.otpHash, hashedOtp)) {
       return res.status(400).json({ message: "Invalid OTP" });
     }
 
@@ -483,6 +685,11 @@ export const verifyResetOtp = async (req, res) => {
         otpExpiresAt: null,
       },
     });
+
+    // The password just changed, so any lockout accumulated while guessing at
+    // this account is no longer protecting anything the owner does not control.
+    await clearOtpAttempts({ identifier: email, purpose: OTP_PURPOSES.RESET_PASSWORD });
+    await clearOtpAttempts({ identifier: email, purpose: PASSWORD_PURPOSE });
 
     res.json({ success: true });
   } catch (err) {
@@ -498,20 +705,101 @@ export const verifyResetOtp = async (req, res) => {
    GOOGLE / FACEBOOK AUTH
 ===================================================== */
 
+/**
+ * Sign in with a Google access token — after proving the token was issued to
+ * THIS application.
+ *
+ * THE HOLE THIS CLOSES
+ *
+ * The handler took `accessToken` from the request body, presented it to
+ * Google's userinfo endpoint, and trusted the email that came back. That reads
+ * as a verification and is not one. Google's userinfo endpoint answers for ANY
+ * valid Google access token carrying the userinfo scope, whoever it was issued
+ * to. So the attack was:
+ *
+ *   1. Register any Google OAuth app of your own — free, minutes.
+ *   2. Get a victim to sign into it, by any pretext. You now hold a Google
+ *      access token for their account.
+ *   3. POST that token to /api/auth/oauth/google here.
+ *   4. userinfo returns the victim's email, this endpoint believes it, and
+ *      hands back a Questivo session for them.
+ *
+ * No password, no code, no interaction with our site at all. It works against
+ * accounts that never used Google sign-in here, because a matching email is all
+ * it took.
+ *
+ * WHAT MAKES IT SAFE
+ *
+ * The `aud` claim. tokeninfo reports which OAuth client a token was minted for,
+ * and a token from a stranger's app carries their client id, not ours. Checking
+ * it is the difference between "this is a real Google token" — which the old
+ * code established, and which is not a useful fact — and "this is a real Google
+ * token that a user obtained by signing into US".
+ *
+ * `email_verified` is checked too: an unverified address on a Google account is
+ * one its holder never proved they control, and treating it as an identity here
+ * would let it be used to claim someone else's account by the same route.
+ */
 export const googleAuth = async (req, res) => {
   try {
     const { accessToken } = req.body;
+    if (typeof accessToken !== "string" || !accessToken) {
+      return res.status(400).json({ message: "Missing Google token" });
+    }
+
+    const expectedAudience = process.env.GOOGLE_CLIENT_ID;
+    if (!expectedAudience) {
+      // Refusing beats falling back to the old, unchecked behaviour: an
+      // unconfigured audience means we cannot tell our tokens from anyone's.
+      console.error("[auth] GOOGLE_CLIENT_ID is not set; refusing Google sign-in");
+      return res.status(503).json({ message: "Google sign-in is not configured" });
+    }
+
+    let tokenInfo;
+    try {
+      const { data } = await axios.get("https://oauth2.googleapis.com/tokeninfo", {
+        params: { access_token: accessToken },
+        timeout: 8000,
+      });
+      tokenInfo = data;
+    } catch {
+      return res.status(401).json({ message: "Invalid Google token" });
+    }
+
+    // `aud` is the client the token was issued to; `azp` is the authorised
+    // party when the two differ. Either matching ours means the user went
+    // through our consent screen.
+    const audiences = [tokenInfo?.aud, tokenInfo?.azp].filter(Boolean);
+    if (!audiences.includes(expectedAudience)) {
+      console.warn(`[auth] Google token rejected: audience ${tokenInfo?.aud} is not ours`);
+      return res.status(401).json({ message: "Invalid Google token" });
+    }
 
     const { data } = await axios.get(
       "https://www.googleapis.com/oauth2/v3/userinfo",
-      { headers: { Authorization: `Bearer ${accessToken}` } }
+      { headers: { Authorization: `Bearer ${accessToken}` }, timeout: 8000 }
     );
 
-    let user = await prisma.user.findUnique({ where: { email: data.email } });
+    const email = typeof data?.email === "string" ? data.email.trim().toLowerCase() : "";
+    if (!email) return res.status(401).json({ message: "Google account has no email" });
+
+    // Both sources are consulted: userinfo reports it, and tokeninfo reports it
+    // independently. Google returns the flag as a real boolean in one and the
+    // string "true" in the other, so both spellings are accepted.
+    const verified = [data?.email_verified, tokenInfo?.email_verified].some(
+      (v) => v === true || v === "true"
+    );
+    if (!verified) {
+      return res
+        .status(401)
+        .json({ message: "Please verify your email with Google before signing in." });
+    }
+
+    let user = await prisma.user.findUnique({ where: { email } });
     if (!user) {
       user = await prisma.user.create({
         data: {
-          email: data.email,
+          email,
           name: data.name,
           authProvider: "GOOGLE",
         },

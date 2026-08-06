@@ -24,8 +24,18 @@ export {
   getExamForPath,
   LLMS_INTRO,
   LLMS_FACTS,
+  // Geo layer: city and college pages, their schema, and the path lookups the
+  // prerenderer uses to decide which graph a given route gets.
+  CITY_ROUTES,
+  COLLEGE_ROUTES,
+  GEO_INDEX_ROUTES,
+  buildCityJsonLd,
+  buildCollegeJsonLd,
+  getCityForPath,
+  getCollegeForPath,
 } from "./lib/seo";
 export { EXAMS, examPath } from "./lib/exams";
+export { ALL_CITIES, CITIES, INTERNATIONAL_CITIES, COLLEGES, cityPath, collegePath } from "./lib/geo";
 
 /**
  * Build-time render used by scripts/prerender.mjs.

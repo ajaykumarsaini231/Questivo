@@ -5,6 +5,7 @@ import { EXAMS, examPath, type Exam } from "../lib/exams";
 import { PYQ_SLUGS, fetchPyqCoverage, type PyqCoverage } from "../lib/pyq";
 import CourseRequestModal from "../componenets/CourseRequestModal";
 import { useAudience } from "../componenets/AudienceProvider";
+import { useAiGenerator } from "../lib/premium";
 
 /**
  * Directory of every exam the site covers.
@@ -31,6 +32,9 @@ const ExamsIndexPage: React.FC = () => {
   // noise the track exists to remove, and they change track in the profile.
   const [showAll, setShowAll] = useState(false);
   const listed = (showAll && !lockedToTrack) || !audience ? allExams : visibleExams;
+  // The closing call to action. It used to point at the AI writer unconditionally
+  // and land most visitors on a paywall — see lib/premium.ts.
+  const generator = useAiGenerator();
 
   useEffect(() => {
     const ac = new AbortController();
@@ -187,8 +191,8 @@ const ExamsIndexPage: React.FC = () => {
             Build a custom paper instead — pick the exam, the topics and the length, and
             Questivo serves previous year questions first.
           </p>
-          <Link to="/GenerateTestPage" className="btn btn-primary btn-lg mt-6">
-            Generate a test <ChevronRight className="h-4 w-4" />
+          <Link to={generator.path} className="btn btn-primary btn-lg mt-6">
+            {generator.label} <ChevronRight className="h-4 w-4" />
           </Link>
         </aside>
       </main>

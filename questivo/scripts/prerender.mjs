@@ -144,6 +144,19 @@ function buildHead(route, mod) {
     );
   }
 
+  // City pages carry Service + areaServed; college pages carry a WebPage that
+  // MENTIONS the institution plus its own FAQPage. One slot, because no route
+  // is ever both — see buildCityJsonLd for why neither emits LocalBusiness.
+  const city = mod.getCityForPath(route.path);
+  const college = city ? undefined : mod.getCollegeForPath(route.path);
+  if (city || college) {
+    tags.push(
+      `<script type="application/ld+json" id="geo-jsonld">${escapeJsonLd(
+        city ? mod.buildCityJsonLd(city) : mod.buildCollegeJsonLd(college)
+      )}</script>`
+    );
+  }
+
   return tags.join("\n    ");
 }
 

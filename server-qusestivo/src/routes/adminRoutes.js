@@ -20,6 +20,9 @@ router.get('/users/:id', AdminController.getUserDetails);
 router.post('/users', AdminController.createUser);
 router.get('/users', AdminController.getAllUsers);
 router.put('/users/:id', AdminController.updateUser);
+// Paid-feature access, one key at a time. Separate from the edit form above
+// because that form rewrites every field it holds — see the handler.
+router.patch('/users/:id/entitlements', AdminController.setUserEntitlement);
 router.delete('/users/:id', AdminController.deleteUser);
 
 // --- Categories ---

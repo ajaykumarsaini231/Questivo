@@ -10,6 +10,7 @@ import { PYQ_SLUGS } from "../lib/pyq";
 // lazy INSIDE PyqSection, so nothing heavy joins the first paint.
 import PyqSection from "../componenets/PyqSection";
 import CourseRequestModal from "../componenets/CourseRequestModal";
+import { AI_GENERATOR_PATH, useAiGenerator } from "../lib/premium";
 
 /**
  * Per-exam landing page.
@@ -31,6 +32,9 @@ const ExamLandingPage: React.FC = () => {
   // claims a free paper exists before anything has been counted.
   const [pyqCount, setPyqCount] = useState(-1);
   const hasPyqBank = pyqCount > 0;
+  // Declared up here with the others for the same reason: this is a hook, and
+  // the not-found branch below returns before anything else runs.
+  const generator = useAiGenerator();
 
   if (!exam) {
     // A visitor who landed here typed or followed a URL for an exam we do not
@@ -79,8 +83,16 @@ const ExamLandingPage: React.FC = () => {
   // assembled from stored questions for nothing, while an AI paper spends model
   // credits on every generation. The mode travels in router state so the page
   // opens on the right one instead of the visitor having to find the selector.
+  //
+  // A visitor who may not have the AI writer goes to the free PYQ builder
+  // instead of to its paywall. The exam does not travel with them — that screen
+  // starts by asking which exam and reads nothing from router state — so they
+  // pick it again, which is one click and still a paper. Landing on a lock
+  // screen was no clicks and no paper.
   const start = () =>
-    navigate("/GenerateTestPage", { state: { selectedExam: exam.code, mode: "practice" } });
+    generator.allowed
+      ? navigate(AI_GENERATOR_PATH, { state: { selectedExam: exam.code, mode: "practice" } })
+      : navigate(generator.path);
   /**
    * A PYQ mock test is sat in the exam player, not written by the model.
    *
@@ -174,8 +186,16 @@ const ExamLandingPage: React.FC = () => {
               </a>
             </div>
           ) : (
+            /* Stops naming the exam when the button leads to the PYQ builder
+               instead of the AI writer. This branch is the case where we hold
+               NO previous year questions for this exam, so that screen cannot
+               offer it — promising "a free GATE MT mock test" and landing on a
+               list that does not contain GATE MT is a worse broken promise than
+               the generic wording. */
             <button onClick={start} className="btn btn-primary btn-lg mt-8">
-              Generate a free {exam.shortName} mock test
+              {generator.allowed
+                ? `Generate a free ${exam.shortName} mock test`
+                : "Build a free practice paper"}
               <ChevronRight className="ml-2 h-4 w-4" />
             </button>
           )}

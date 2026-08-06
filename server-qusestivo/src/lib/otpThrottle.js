@@ -316,6 +316,180 @@ export async function guardOtpSend(req, res, { identifier, purpose }) {
   return false;
 }
 
+/* =====================================================================
+   VERIFICATION ATTEMPTS — the other half of the OTP limit
+   ===================================================================== */
+
+/**
+ * Everything above limits how often a code can be SENT. Nothing limited how
+ * often one could be GUESSED, and those are different attacks with different
+ * defences.
+ *
+ * A code is six digits. verifySignupOtp, verifyLoginOtp and verifyResetOtp each
+ * compared the submitted code to the stored hash and, on a mismatch, returned
+ * "Invalid OTP" and left the code live — no counter, no lockout, no
+ * invalidation. So an attacker who knew a victim's email could ask for one code
+ * and then submit guesses at whatever rate the network allowed, for the whole
+ * validity window, and a million guesses is minutes of traffic. The send
+ * throttle does not touch this: it costs the attacker exactly one email.
+ *
+ * A per-IP request limit is not the fix either. Guesses can be spread across
+ * addresses, and this audience shares addresses by the thousand behind
+ * carrier-grade NAT. The count has to be kept against the ACCOUNT under attack,
+ * which is what this does.
+ *
+ * The row lives in the same table, under "VERIFY:<purpose>", so a lockout on
+ * guessing a login code cannot also stop the real owner from resetting their
+ * password — and no migration was needed to add it.
+ */
+
+/** Wrong codes accepted before the account is locked for MAX_ATTEMPT_WINDOW. */
+export const MAX_VERIFY_ATTEMPTS = int("OTP_MAX_VERIFY_ATTEMPTS", 8);
+/** How long a locked account stays locked. */
+export const VERIFY_BLOCK_MINUTES = int("OTP_VERIFY_BLOCK_MINUTES", 15);
+/** Quiet period after which failed attempts are forgotten. */
+export const VERIFY_DECAY_MINUTES = int("OTP_VERIFY_DECAY_MINUTES", 30);
+
+const verifyKey = (purpose) => `VERIFY:${purpose}`;
+
+/**
+ * Take one guess against `identifier`, or refuse because there have been too
+ * many.
+ *
+ * Counted BEFORE the code is checked, not after a failure. Counting failures
+ * only sounds tighter but it is not: the attempt that finally succeeds is the
+ * one an attacker cares about, and a guess that is never counted until it is
+ * wrong lets a caller learn "that one was right" for free. Charging every
+ * attempt and clearing the counter on success (see clearOtpAttempts) gives the
+ * legitimate user their full allowance back the moment they get in.
+ *
+ * @returns {Promise<{allowed: boolean, retryAfterSeconds: number, message: string}>}
+ */
+export async function consumeOtpAttempt({ identifier, purpose, max }) {
+  const key = normalise(identifier);
+  const limit = max ?? MAX_VERIFY_ATTEMPTS;
+  const blockSeconds = VERIFY_BLOCK_MINUTES * 60;
+  const refuse = {
+    allowed: false,
+    retryAfterSeconds: blockSeconds,
+    message:
+      `Too many incorrect codes for this account. ` +
+      `For security, try again in ${VERIFY_BLOCK_MINUTES} minutes.`,
+  };
+
+  if (!key) return refuse;
+
+  try {
+    return await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`
+        INSERT INTO "OtpThrottle" ("id", "identifier", "purpose", "lastSentAt", "sendCount", "strikes", "createdAt", "updatedAt")
+        VALUES (gen_random_uuid()::text, ${key}, ${verifyKey(purpose)}, now(), 0, 0, now(), now())
+        ON CONFLICT ("identifier", "purpose") DO NOTHING`;
+
+      const rows = await tx.$queryRaw`
+        SELECT "strikes",
+               "blockedUntil",
+               ("blockedUntil" IS NOT NULL AND "blockedUntil" > now()) AS "blocked",
+               GREATEST(0, CEIL(EXTRACT(EPOCH FROM ("blockedUntil" - now()))))::int AS "remaining",
+               (EXTRACT(EPOCH FROM (now() - "lastSentAt")) > ${VERIFY_DECAY_MINUTES * 60}::int) AS "stale"
+        FROM "OtpThrottle"
+        WHERE "identifier" = ${key} AND "purpose" = ${verifyKey(purpose)}
+        FOR UPDATE`;
+
+      const row = rows[0];
+      if (!row) return refuse;
+
+      if (row.blocked) {
+        const remaining = Number(row.remaining) || blockSeconds;
+        return {
+          allowed: false,
+          retryAfterSeconds: remaining,
+          message:
+            `Too many incorrect codes for this account. ` +
+            `For security, try again in about ${Math.ceil(remaining / 60)} minute(s).`,
+        };
+      }
+
+      // A long gap since the last attempt means the previous run was a person
+      // fumbling a code, not a script working through the space. Starting from
+      // zero there keeps one bad day from making the next one a lockout.
+      const attempts = (row.stale ? 0 : Number(row.strikes)) + 1;
+
+      if (attempts > limit) {
+        await tx.$executeRaw`
+          UPDATE "OtpThrottle"
+          SET "strikes" = ${attempts},
+              "blockedUntil" = now() + (${blockSeconds}::int * interval '1 second'),
+              "lastSentAt" = now(),
+              "sendCount" = "sendCount" + 1,
+              "updatedAt" = now()
+          WHERE "identifier" = ${key} AND "purpose" = ${verifyKey(purpose)}`;
+        return refuse;
+      }
+
+      await tx.$executeRaw`
+        UPDATE "OtpThrottle"
+        SET "strikes" = ${attempts},
+            "lastSentAt" = now(),
+            "sendCount" = "sendCount" + 1,
+            "updatedAt" = now()
+        WHERE "identifier" = ${key} AND "purpose" = ${verifyKey(purpose)}`;
+
+      return { allowed: true, retryAfterSeconds: 0, message: "" };
+    });
+  } catch (err) {
+    // FAIL CLOSED, for the same reason consumeOtpSlot does. The counter being
+    // unreachable is indistinguishable from the counter being hammered, and the
+    // thing on the other side of it is an authentication check.
+    console.error(`[otp] attempt limiter unavailable, refusing verify: ${err.message}`);
+    return refuse;
+  }
+}
+
+/**
+ * Give the allowance back after a credential is accepted.
+ *
+ * Without this a user who mistyped their code four times would carry those four
+ * against their next sign-in tomorrow, and a shared family address would
+ * accumulate strangers' typos until it locked. Success is the signal that the
+ * caller is the account holder, which is exactly when forgetting is safe.
+ */
+export async function clearOtpAttempts({ identifier, purpose }) {
+  const key = normalise(identifier);
+  if (!key) return;
+  try {
+    await prisma.otpThrottle.updateMany({
+      where: { identifier: key, purpose: verifyKey(purpose) },
+      data: { strikes: 0, blockedUntil: null },
+    });
+  } catch (err) {
+    // Losing the reset costs the user some of their next allowance. It must
+    // never cost them the sign-in that just succeeded.
+    console.warn(`[otp] could not clear attempts: ${err.message}`);
+  }
+}
+
+/**
+ * Refuse a verification the caller has spent their attempts on, in the same
+ * 429 shape guardOtpSend uses so the frontend has one thing to handle.
+ *
+ * @returns {Promise<boolean>} true when the caller may proceed.
+ */
+export async function guardOtpVerify(req, res, { identifier, purpose, max }) {
+  const result = await consumeOtpAttempt({ identifier, purpose, max });
+  if (result.allowed) return true;
+
+  res.set("Retry-After", String(result.retryAfterSeconds));
+  res.status(429).json({
+    success: false,
+    message: result.message,
+    error: result.message,
+    retryAfterSeconds: result.retryAfterSeconds,
+    blocked: true,
+  });
+  return false;
+}
+
 /**
  * Drop throttle rows nothing will ever read again.
  *

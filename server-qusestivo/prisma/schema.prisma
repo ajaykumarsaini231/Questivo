@@ -62,6 +62,21 @@ model User {
   /// whole track.
   focusExam  String?
 
+  /// Paid features this account may use whatever the site-wide switch says.
+  ///
+  /// Holds entitlement keys as lib/entitlements.js names them — currently
+  /// "aiGeneration" and "mockGeneration". Empty for almost everyone: the
+  /// environment switch decides for accounts with nothing listed here, and this
+  /// column only ever OPENS a feature that is otherwise closed. It cannot close
+  /// one that is open, so granting it to the wrong person costs a paper, not the
+  /// site.
+  ///
+  /// A string array rather than a `plan` enum on purpose. There are no plans
+  /// yet, and inventing one now would mean deciding today which features travel
+  /// together — the exact guess that is expensive to unwind. A set of keys says
+  /// only what is true: this account may use these things.
+  entitlements String[] @default([])
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

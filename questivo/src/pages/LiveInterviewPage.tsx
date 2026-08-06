@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { loadScript } from '../lib/loadScript';
+import { readSessionToken } from '../lib/session';
 
 const ORT_CDN = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/ort.js";
 const VAD_CDN = "https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.19/dist/bundle.min.js";
@@ -342,7 +343,23 @@ export const LiveInterviewPage = () => {
                 upgrade: false,
                 reconnection: true,
                 reconnectionAttempts: 10,
-                reconnectionDelay: 2000
+                reconnectionDelay: 2000,
+                /**
+                 * The server now refuses to join a socket to an interview that
+                 * is not the caller's, which means the socket has to say who
+                 * the caller is.
+                 *
+                 * The session cookie cannot do it here. Websockets cannot use
+                 * the /api rewrite — a rewrite ends the request and never holds
+                 * an upgraded connection open — so SOCKET_URL is an absolute
+                 * origin, the handshake is cross-site, and the cookie is not
+                 * attached. The bearer copy is exactly the carrier that exists
+                 * for this case; see lib/session.ts.
+                 *
+                 * Unauthenticated interviews still work: the server falls back
+                 * to matching the anonymous marker it filed the session under.
+                 */
+                auth: { token: readSessionToken() ?? undefined }
             });
 
             socketRef.current.on("connect", () => {

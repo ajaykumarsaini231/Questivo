@@ -9,6 +9,10 @@ import {
   buildBreadcrumbs,
   buildExamJsonLd,
   getExamForPath,
+  buildCityJsonLd,
+  buildCollegeJsonLd,
+  getCityForPath,
+  getCollegeForPath,
 } from "../lib/seo";
 
 /**
@@ -42,6 +46,8 @@ function setLink(rel: string, href: string) {
 
 const BREADCRUMB_ID = "breadcrumb-jsonld";
 const EXAM_JSONLD_ID = "exam-jsonld";
+/** City and college graphs share one slot: no route is ever both. */
+const GEO_JSONLD_ID = "geo-jsonld";
 
 /** Replace a per-route JSON-LD block, removing any left over from the last route. */
 function setJsonLd(id: string, data: unknown | null) {
@@ -109,6 +115,17 @@ export default function Seo() {
     setJsonLd(BREADCRUMB_ID, isKnown ? buildBreadcrumbs(route) : null);
     const exam = getExamForPath(pathname);
     setJsonLd(EXAM_JSONLD_ID, exam ? buildExamJsonLd(exam) : null);
+
+    // Geo pages carry a Service/areaServed or a college WebPage graph. Cleared
+    // on every navigation for the same reason the exam graph is: a leftover
+    // block would tell a crawler that the page it is now on serves a city it
+    // has nothing to do with.
+    const city = getCityForPath(pathname);
+    const college = city ? undefined : getCollegeForPath(pathname);
+    setJsonLd(
+      GEO_JSONLD_ID,
+      city ? buildCityJsonLd(city) : college ? buildCollegeJsonLd(college) : null
+    );
   }, [pathname]);
 
   return null;

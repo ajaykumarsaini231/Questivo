@@ -17,6 +17,7 @@ import axios from "axios";
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAudience } from './AudienceProvider';
 import { createApiClient } from '../lib/api';
+import { AI_GENERATOR_PATH, useAiGenerator } from '../lib/premium';
 
 // Module scope, not inside the component: it was rebuilt on every render, and
 // each rebuild now costs a fresh pair of session interceptors.
@@ -64,6 +65,11 @@ const HomePage: React.FC = () => {
   // The visitor's track. Until it has been read this returns every exam and
   // allows every feature, which is what the prerendered homepage contains.
   const { visibleExams, allExams, can, audience, focusExam, lockedToTrack } = useAudience();
+
+  // Whether the AI writer is this visitor's to use. A track decides what the
+  // site is ABOUT for them; this decides what the API will actually serve them,
+  // and the two are separate questions. See lib/premium.ts.
+  const generator = useAiGenerator();
 
   // --- 1. Auth & Typing Effect ---
   useEffect(() => {
@@ -142,15 +148,27 @@ const HomePage: React.FC = () => {
   };
 
   // --- 4. Navigation Handlers ---
+  //
+  // Where "start a test" leads is the server's answer, not a constant: the AI
+  // writer for accounts entitled to it, the free PYQ builder for everyone else.
+  // It used to be the AI writer for everybody, so the homepage's main call to
+  // action put most visitors on a paywall — after asking them to sign up first.
   const handleStartTest = (examCode?: string) => {
+    if (!generator.allowed) {
+      // No sign-up detour. The PYQ builder does not need an account, and
+      // demanding one on the way to a free feature is how a homepage loses the
+      // visitor it just persuaded.
+      navigate(generator.path);
+      return;
+    }
     if (!user) {
       navigate("/signup", {
-        state: { redirectTo: "/GenerateTestPage", selectedExam: examCode },
+        state: { redirectTo: AI_GENERATOR_PATH, selectedExam: examCode },
       });
       return;
     }
     // Navigate with the specific exam code pre-selected
-    navigate("/GenerateTestPage", {
+    navigate(AI_GENERATOR_PATH, {
       state: examCode ? { selectedExam: examCode } : undefined,
     });
   };
@@ -516,8 +534,17 @@ const HomePage: React.FC = () => {
               {
                 title: "Practice",
                 links: [
-                  { label: "Generate a mock test", to: "/GenerateTestPage" },
+                  // Same switch as the hero above — a footer that keeps
+                  // advertising a locked feature is the site disagreeing with
+                  // itself in the reader's peripheral vision.
+                  { label: generator.label, to: generator.path },
                   { label: "All exams", to: "/exams" },
+                  // The two geo hubs. Linked from here rather than left to the
+                  // sitemap alone: ~100 pages hang off them, and a hub a
+                  // crawler only reaches through sitemap.xml gets discovered
+                  // slowly and passes no internal link equity on the way.
+                  { label: "Practice by city", to: "/practice" },
+                  { label: "Which exam gets you in", to: "/college" },
                   { label: "Why Questivo", to: "/#features" },
                 ],
               },

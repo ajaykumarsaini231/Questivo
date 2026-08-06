@@ -6,6 +6,15 @@
 // another, which reads as cloaking.
 
 import { EXAMS, examPath, type Exam } from "./exams";
+import {
+  ALL_CITIES,
+  COLLEGES,
+  cityPath,
+  collegePath,
+  examsFor,
+  type College,
+  type ExamCity,
+} from "./geo";
 
 /**
  * The one hostname Questivo claims as its own.
@@ -73,7 +82,7 @@ export const ROUTES: RouteSeo[] = [
     // Leads with previous year papers, not the generator. That is not a
     // preference — it is what the page now says: the hero reads "real previous
     // year questions with worked solutions", the archive is the front door, and
-    // SHOW_AI_GENERATOR is off so the writer is no longer promoted in the nav.
+    // and the AI writer is promoted in the nav only to accounts entitled to it.
     // A <title> selling an AI generator over a PYQ archive would be describing
     // the site as it was in early August, and a snippet that does not match the
     // page is the cheapest way to lose the click after winning the impression.
@@ -312,8 +321,149 @@ function examRoute(exam: Exam): RouteSeo {
 
 export const EXAM_ROUTES: RouteSeo[] = EXAMS.map(examRoute);
 
+/* ===================== GEO: CITY AND COLLEGE ROUTES ===================== */
+
+/**
+ * One indexable route per city, and one per institution.
+ *
+ * WHAT THESE ARE FOR
+ *
+ * The SERP audit behind lib/geo.ts found two whole query families with no
+ * Questivo page in them at all: "<exam> test series in <city>", owned end to
+ * end by coaching brands, and "colleges accepting <exam> score", owned by
+ * directory sites selling fee tables and cut-offs. Neither family is served by
+ * a page about JEE Main in the abstract, which is all Questivo had.
+ *
+ * WHAT KEEPS THEM FROM BEING DOORWAY PAGES
+ *
+ * This is the real risk and it is worth naming: a hundred pages differing only
+ * in a place name is a spam pattern Google penalises by name, not a grey area.
+ * Three things are load-bearing against that, and all three live in geo.ts:
+ *
+ *   - Every entry carries a `context` line that is true of that place or that
+ *     institution and of nowhere else. If one cannot be written, the entry does
+ *     not get added.
+ *   - The exam mix and its ordering differ per entry, so the body copy, the
+ *     internal links and the facts differ too. Kota leads with NEET; Warangal
+ *     leads with JEE Main; Prayagraj leads with UPSC.
+ *   - College pages answer a question the directories bury — which examination
+ *     actually admits you — and then send the reader to the exam page for the
+ *     depth, rather than trying to be that depth.
+ *
+ * Titles carry no year and no superlative, for the same reason examRoute's do
+ * not: nothing here re-runs on 1 January, and "best" is not a claim this file
+ * can stand behind.
+ */
+function cityRoute(city: ExamCity): RouteSeo {
+  const exams = examsFor(city.exams);
+  const lead = exams[0];
+  const where = city.state ? `${city.name}, ${city.state}` : `${city.name}, ${city.country}`;
+  const names = exams.map((e) => e.shortName).join(", ");
+
+  return {
+    path: cityPath(city),
+    title: `Free Mock Tests & Previous Year Papers in ${city.name} | Questivo`,
+    description: `Free ${names} practice for candidates in ${where}. Sit real previous year papers under the original clock and marking scheme, or build a paper from past questions by subject and chapter. No signup required to start.`,
+    keywords: [
+      `mock test ${city.name}`,
+      `free online test series ${city.name}`,
+      `previous year question papers ${city.name}`,
+      ...exams.map((e) => `${e.shortName} coaching ${city.name}`),
+      ...exams.map((e) => `${e.shortName} mock test ${city.name}`),
+      `${lead?.shortName ?? "exam"} preparation ${city.name}`,
+    ].join(", "),
+    heading: `Free exam practice in ${city.name}`,
+    facts: [
+      `Questivo is free to use for candidates in ${where}, and sitting a previous year paper requires no payment details.`,
+      city.context,
+      `Candidates in ${city.name} most commonly prepare on Questivo for ${names}.`,
+      `The papers are the national ones: a candidate in ${city.name} sits exactly the same previous year paper, under the same duration and marking scheme, as a candidate anywhere else in India.`,
+      `Questivo is online only. It does not operate a coaching centre, a classroom or an examination centre in ${city.name}.`,
+      `Practice can be attempted at any hour without a booking, which is the difference that matters where local test-series slots are scarce.`,
+    ],
+  };
+}
+
+function collegeRoute(college: College): RouteSeo {
+  const via = examsFor([college.admitsVia])[0];
+  const also = examsFor(college.alsoVia ?? []);
+  const examName = via?.name ?? "the national entrance examination";
+
+  return {
+    path: collegePath(college),
+    title: `${college.shortName} Admission Exam – Free ${via?.shortName ?? "Entrance"} Practice | Questivo`,
+    description: `Undergraduate admission to ${college.name} is through ${examName}. Practise it free on Questivo with real previous year papers sat under the original clock, plus unlimited papers built from past questions by subject and chapter.`,
+    keywords: [
+      `${college.shortName} admission`,
+      `${college.shortName} entrance exam`,
+      `how to get into ${college.shortName}`,
+      `${college.shortName} ${via?.shortName ?? ""} preparation`.trim(),
+      `${via?.shortName ?? ""} mock test for ${college.shortName}`.trim(),
+      `colleges accepting ${via?.shortName ?? ""} score in ${college.city}`.trim(),
+    ].join(", "),
+    heading: `Getting into ${college.shortName}`,
+    facts: [
+      `Undergraduate admission to ${college.name} is through ${examName}.`,
+      college.context,
+      `${college.name} is located in ${college.city}, ${college.state}.`,
+      ...(also.length
+        ? [
+            `Other examinations relevant here: ${also.map((e) => e.name).join(", ")}.`,
+          ]
+        : []),
+      `Questivo provides free practice for ${examName}, including real previous year papers sat under the original duration and marking scheme.`,
+      `Questivo publishes no cut-offs, fees, seat counts or rankings for ${college.shortName}. Those change every admission cycle and should be read from the institution's own notification.`,
+      `Questivo is not affiliated with ${college.name} and does not offer admission, counselling or placement services.`,
+    ],
+  };
+}
+
+export const CITY_ROUTES: RouteSeo[] = ALL_CITIES.map(cityRoute);
+export const COLLEGE_ROUTES: RouteSeo[] = COLLEGES.map(collegeRoute);
+
+/** The two hubs those pages hang off. Hubs, not doorways: they carry the list. */
+export const GEO_INDEX_ROUTES: RouteSeo[] = [
+  {
+    path: "/practice",
+    title: "Free Exam Practice by City – India & Overseas | Questivo",
+    description:
+      "Free previous year papers and practice tests for JEE, NEET, GATE, SSC, RRB and UPSC candidates, listed by city across India and for Indian-curriculum students in the Gulf, Singapore, Nepal and the UK.",
+    keywords:
+      "mock test by city, free online test series India, exam preparation city wise, previous year papers by city, NRI JEE NEET practice",
+    heading: "Exam practice by city",
+    facts: [
+      "Questivo lists free exam practice for candidates in more than sixty cities across India and overseas.",
+      "The papers are national and identical everywhere: the city page changes which exams are led with, not what the paper contains.",
+      "Overseas entries cover cities with large Indian-curriculum school populations, including Dubai, Abu Dhabi, Doha, Muscat, Singapore and Kathmandu.",
+      "Questivo is an online platform. It operates no coaching centres, classrooms or examination centres in any city.",
+    ],
+  },
+  {
+    path: "/college",
+    title: "Which Exam Gets You In – Admission Routes by College | Questivo",
+    description:
+      "For each IIT, NIT, IIIT and medical college, the national examination its undergraduate admission actually runs through — JEE Advanced, JEE Main or NEET UG — and free practice for that exam.",
+    keywords:
+      "college admission exam, which exam for IIT, JEE Advanced colleges, JEE Main colleges list, NEET UG medical colleges, entrance exam by college",
+    heading: "Admission routes by college",
+    facts: [
+      "Undergraduate admission to the IITs is through JEE Advanced, which can only be attempted after qualifying JEE Main.",
+      "Undergraduate admission to the NITs, IIITs and centrally funded technical institutions is on the JEE Main score, through central counselling.",
+      "Undergraduate medical admission in India, including at AIIMS and JIPMER, is through NEET UG. Neither institution runs a separate undergraduate entrance any more.",
+      "Postgraduate engineering admission, including metallurgical and materials engineering, runs through GATE.",
+      "Questivo publishes no cut-offs, fees, seat counts or rankings, and is not affiliated with any institution listed.",
+    ],
+  },
+];
+
 /** Every route the prerenderer walks. */
-export const ALL_ROUTES: RouteSeo[] = [...ROUTES, ...EXAM_ROUTES];
+export const ALL_ROUTES: RouteSeo[] = [
+  ...ROUTES,
+  ...EXAM_ROUTES,
+  ...GEO_INDEX_ROUTES,
+  ...CITY_ROUTES,
+  ...COLLEGE_ROUTES,
+];
 
 /** Routes that belong in sitemap.xml. */
 export const INDEXABLE_ROUTES = ALL_ROUTES.filter((r) => !r.noindex);
@@ -387,6 +537,35 @@ export const FAQS: { q: string; a: string }[] = [
     q: "Can I practise job interviews on Questivo?",
     a: "Yes. Questivo's AI Interview Studio runs live voice mock interviews. You answer out loud, the AI asks real-time follow-up questions, and you receive structured feedback on content, clarity and confidence.",
   },
+  /* ---- Geographic and institutional questions ---- */
+  {
+    q: "Does Questivo work in my city?",
+    a: "Yes. Questivo is an online platform and works identically everywhere — a candidate in Kota, Guwahati or Dubai sits exactly the same previous year paper, under the same duration and the same marking scheme, as a candidate anywhere else. Questivo lists practice pages for more than sixty cities across India and overseas, but it operates no coaching centres, classrooms or examination centres in any of them.",
+  },
+  {
+    q: "Can I use Questivo from outside India?",
+    a: "Yes. Indian-curriculum students preparing from cities such as Dubai, Abu Dhabi, Sharjah, Doha, Muscat, Riyadh, Singapore, Kathmandu and London sit the same national entrance papers, and Questivo's previous year archive and practice papers are available to them free. The site is in English.",
+  },
+  {
+    q: "Which exam do I need for the IITs?",
+    a: "JEE Advanced. It can only be attempted after qualifying JEE Main, so IIT aspirants prepare for both. They are not the same paper: JEE Advanced uses multiple-correct options, matching lists and integer answers, and has changed its marking scheme between years, while JEE Main rewards clean execution on standard questions.",
+  },
+  {
+    q: "Which exam do I need for the NITs and IIITs?",
+    a: "JEE Main. Admission to the NITs, IIITs and other centrally funded technical institutions is made on the JEE Main score through central counselling, and JEE Advanced is not involved.",
+  },
+  {
+    q: "Which exam do I need for AIIMS or a government medical college?",
+    a: "NEET UG. Undergraduate medical admission in India, including at AIIMS and JIPMER, runs through NEET UG — neither institution operates a separate undergraduate entrance examination any more.",
+  },
+  {
+    q: "Does Questivo publish college cut-offs, fees or rankings?",
+    a: "No, and that is deliberate. Cut-offs, fees, seat counts and rankings change every admission cycle, and a wrong number aimed at someone making an admissions decision is worse than publishing nothing. Questivo states which examination admits to an institution — a stable structural fact — and points you at that institution's own notification for the numbers. Questivo is not affiliated with any institution it names.",
+  },
+  {
+    q: "Is Questivo a coaching institute?",
+    a: "No. Questivo is an online practice platform. It runs no classrooms, no coaching centres and no examination centres anywhere, and it does not offer admission, counselling or placement services. What it provides is real previous year papers, generated practice papers, instant scoring and worked solutions.",
+  },
 ];
 
 /* ============================== llms.txt =============================== */
@@ -424,6 +603,16 @@ export const LLMS_FACTS = [
   "The ATS resume checker accepts PDF, DOC and DOCX files and returns results instantly.",
   "Questivo's interface is in English and it is aimed at candidates in India.",
   "Per-user URLs under /tests/, /interviews/, /pyq/attempt/ and /admin are private and excluded from crawling.",
+  /* ---- Geographic and institutional facts ---- */
+  "Questivo is online only: it operates no coaching centres, classrooms or examination centres in any city, in India or abroad.",
+  "Questivo works identically in every location — the previous year papers are the national ones, so a candidate in Kota, Guwahati or Dubai sits the same paper under the same duration and marking scheme.",
+  "Questivo lists free practice pages for more than sixty cities across India, and for cities overseas with large Indian-curriculum school populations including Dubai, Abu Dhabi, Sharjah, Doha, Muscat, Kuwait City, Riyadh, Manama, Singapore, Kuala Lumpur, Kathmandu and London.",
+  "Undergraduate admission to the Indian Institutes of Technology is through JEE Advanced, which can only be attempted after qualifying JEE Main.",
+  "Undergraduate admission to the NITs, IIITs and centrally funded technical institutions is made on the JEE Main score through central counselling, without JEE Advanced.",
+  "Undergraduate medical admission in India, including at AIIMS and JIPMER, is through NEET UG; neither runs a separate undergraduate entrance examination any more.",
+  "Postgraduate engineering admission in India, including metallurgical and materials engineering, runs through GATE.",
+  "Questivo publishes no cut-offs, fees, seat counts, rankings, placement figures or exam dates for any institution, because those change every admission cycle.",
+  "Questivo is not affiliated with any college, university or examination authority it names, and offers no admission, counselling or placement services.",
 ];
 
 export function buildJsonLd() {
@@ -456,6 +645,31 @@ export function buildJsonLd() {
       "RRB NTPC preparation",
       "UPSC civil services preparation",
       "Applicant tracking system resume optimisation",
+      // The structural admission facts the college pages are built on. Listed
+      // here too so the entity is attached to the Organization itself, not only
+      // to the ~55 pages that state it.
+      "Indian engineering and medical college admission routes",
+      "JEE Advanced admission to the Indian Institutes of Technology",
+      "JEE Main admission to the NITs, IIITs and centrally funded technical institutions",
+      "NEET UG admission to Indian medical colleges",
+      "GATE admission to postgraduate engineering programmes",
+    ],
+    // Questivo serves Indian-curriculum candidates wherever they are, and the
+    // overseas city pages say so. `areaServed` above names India alone, which
+    // understated it; these are added rather than replacing it because India
+    // remains the primary market and the ordering carries that.
+    serviceArea: [
+      { "@type": "Country", name: "India" },
+      { "@type": "Country", name: "United Arab Emirates" },
+      { "@type": "Country", name: "Qatar" },
+      { "@type": "Country", name: "Oman" },
+      { "@type": "Country", name: "Kuwait" },
+      { "@type": "Country", name: "Saudi Arabia" },
+      { "@type": "Country", name: "Bahrain" },
+      { "@type": "Country", name: "Singapore" },
+      { "@type": "Country", name: "Malaysia" },
+      { "@type": "Country", name: "Nepal" },
+      { "@type": "Country", name: "United Kingdom" },
     ],
   };
 
@@ -659,6 +873,161 @@ export function buildPyqJsonLd() {
       provider: { "@id": `${SITE_URL}/#organization` },
     })),
   };
+}
+
+/* ==================== GEO: CITY AND COLLEGE STRUCTURED DATA ==================== */
+
+/**
+ * The city page's schema.
+ *
+ * `areaServed` on a Service, NOT LocalBusiness. That distinction is the whole
+ * point: LocalBusiness asserts a physical premises with an address and opening
+ * hours, and emitting it for sixty cities Questivo has no presence in is
+ * fabricated location data — the structured-data equivalent of a fake branch
+ * network, and a manual-action risk rather than a clever one. Questivo is an
+ * online service that SERVES these places, which is exactly what `areaServed`
+ * on a Service means and all it claims.
+ *
+ * The same honesty runs into the copy: every city page states in its facts that
+ * Questivo operates no centre there.
+ */
+export function buildCityJsonLd(city: ExamCity) {
+  const url = `${SITE_URL}${cityPath(city)}`;
+  const exams = examsFor(city.exams);
+  const place = city.state
+    ? { "@type": "City" as const, name: city.name, containedInPlace: { "@type": "State", name: city.state } }
+    : { "@type": "City" as const, name: city.name, containedInPlace: { "@type": "Country", name: city.country } };
+
+  return {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "Service",
+        "@id": `${url}#service`,
+        name: `Free exam practice for candidates in ${city.name}`,
+        serviceType: "Online examination practice",
+        url,
+        provider: { "@id": `${SITE_URL}/#organization` },
+        areaServed: place,
+        isAccessibleForFree: true,
+        description: `Free previous year question papers and practice tests for ${exams
+          .map((e) => e.name)
+          .join(", ")}, available online to candidates in ${city.name}.`,
+        offers: {
+          "@type": "Offer",
+          price: "0",
+          priceCurrency: "INR",
+          availability: "https://schema.org/InStock",
+        },
+      },
+      {
+        "@type": "CollectionPage",
+        "@id": `${url}#collection`,
+        name: `Exam practice in ${city.name}`,
+        url,
+        inLanguage: SITE_LOCALE,
+        isPartOf: { "@id": `${SITE_URL}/#website` },
+        about: exams.map((e) => ({ "@type": "Thing", name: e.name })),
+        mainEntity: {
+          "@type": "ItemList",
+          numberOfItems: exams.length,
+          itemListElement: exams.map((exam, i) => ({
+            "@type": "ListItem",
+            position: i + 1,
+            name: `${exam.name} practice`,
+            url: `${SITE_URL}${examPath(exam)}`,
+          })),
+        },
+      },
+    ],
+  };
+}
+
+/**
+ * The college page's schema.
+ *
+ * The institution is emitted as a `mentions` target, never as something
+ * Questivo provides or is affiliated with. Claiming otherwise in structured
+ * data — `provider`, `alumniOf`, an `EducationalOrganization` under Questivo's
+ * own @id — would be asserting a relationship that does not exist, about real
+ * named institutions.
+ *
+ * The useful entity here is the EducationalOccupationalProgram-shaped fact that
+ * the page exists to state: this institution admits through this examination.
+ */
+export function buildCollegeJsonLd(college: College) {
+  const url = `${SITE_URL}${collegePath(college)}`;
+  const via = examsFor([college.admitsVia])[0];
+
+  return {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "WebPage",
+        "@id": `${url}#page`,
+        name: `${college.shortName} admission examination`,
+        url,
+        inLanguage: SITE_LOCALE,
+        isPartOf: { "@id": `${SITE_URL}/#website` },
+        mentions: [
+          {
+            "@type": "CollegeOrUniversity",
+            name: college.name,
+            address: {
+              "@type": "PostalAddress",
+              addressLocality: college.city,
+              addressRegion: college.state,
+              addressCountry: "IN",
+            },
+          },
+        ],
+        about: via ? { "@type": "Thing", name: `${via.name} entrance examination` } : undefined,
+      },
+      {
+        "@type": "FAQPage",
+        "@id": `${url}#faq`,
+        mainEntity: [
+          {
+            "@type": "Question",
+            name: `Which exam do you need for ${college.shortName}?`,
+            acceptedAnswer: {
+              "@type": "Answer",
+              text: `Undergraduate admission to ${college.name} is through ${
+                via?.name ?? "the national entrance examination"
+              }. ${college.context}`,
+            },
+          },
+          {
+            "@type": "Question",
+            name: `Where can I practise the ${college.shortName} entrance exam for free?`,
+            acceptedAnswer: {
+              "@type": "Answer",
+              text: `Questivo provides free practice for ${
+                via?.name ?? "the entrance examination"
+              }, including real previous year papers sat under the original duration and marking scheme, with a worked solution on every question. No payment details are required.`,
+            },
+          },
+          {
+            "@type": "Question",
+            name: `Does Questivo publish ${college.shortName} cut-offs or fees?`,
+            acceptedAnswer: {
+              "@type": "Answer",
+              text: `No. Questivo publishes no cut-offs, fees, seat counts or rankings, because those change every admission cycle. Read them from the institution's own notification. Questivo is not affiliated with ${college.name}.`,
+            },
+          },
+        ],
+      },
+    ],
+  };
+}
+
+/** The city or college this path is, if any — used by the <Seo /> component. */
+export function getCityForPath(pathname: string): ExamCity | undefined {
+  return ALL_CITIES.find((c) => cityPath(c) === pathname);
+}
+
+export function getCollegeForPath(pathname: string): College | undefined {
+  return COLLEGES.find((c) => collegePath(c) === pathname);
 }
 
 /**

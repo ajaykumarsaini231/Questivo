@@ -2,10 +2,95 @@ import { Server } from 'socket.io';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import jwt from 'jsonwebtoken';
+// `parseCookie`, and imported by name. cookie@2 has no default export and
+// renamed `parse` — either mistake fails at module-instantiation time, which
+// takes the whole server down at boot rather than erroring on the first socket.
+import { parseCookie } from 'cookie';
 import { MsEdgeTTS, OUTPUT_FORMAT } from 'msedge-tts'; // 🛠️ HIGH-STABILITY STABLE INGESTION LAYER
 import prisma from '../prismaClient.js';
 // Credentials, models and cross-provider failover live in the AI client.
 import { chat, transcribe, ROLES } from '../lib/aiClient.js';
+import { isAllowedOrigin } from '../lib/allowedOrigins.js';
+
+/**
+ * Who is on the other end of this socket.
+ *
+ * The REST side of interviews checks ownership properly —
+ * getInterviewTranscript refuses a session that is not yours. The socket did
+ * not check anything at all: it accepted a connection from any origin, and
+ * `join-interview-session` took a session id and loaded that session's
+ * `resumeSnapshot` into the model's system prompt. Anyone holding an id could
+ * join a stranger's interview and simply ask the interviewer to recite the
+ * candidate's resume back to them. The careful check on the HTTP route was
+ * bypassable by connecting over the websocket instead.
+ *
+ * A socket carries the same two credentials an HTTP request does: the session
+ * cookie is sent on the handshake, and the client can pass the bearer token in
+ * `auth.token`. Both are read here so the socket authenticates exactly the way
+ * every other entry point does.
+ */
+function identifySocket(socket) {
+  const fromAuth = socket.handshake?.auth?.token;
+  const header = socket.handshake?.headers?.authorization;
+  const bearer =
+    typeof header === 'string' && header.startsWith('Bearer ')
+      ? header.slice(7).trim()
+      : null;
+
+  let fromCookie = null;
+  try {
+    const raw = socket.handshake?.headers?.cookie;
+    if (raw) fromCookie = parseCookie(raw).token || null;
+  } catch {
+    // A malformed Cookie header is not a session; fall through to the others.
+  }
+
+  const token = fromCookie || (typeof fromAuth === 'string' && fromAuth) || bearer;
+  if (!token) return null;
+
+  try {
+    const decoded = jwt.verify(token, process.env.Secret_Token);
+    return decoded?.userId || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The id an interview started without an account is filed under.
+ *
+ * interviewController stores `anon:<ip>` when nobody is signed in, and the
+ * analyser is deliberately usable logged out, so refusing every socket without
+ * a JWT would break a supported flow rather than close a hole. Matching the
+ * same string here lets an anonymous candidate rejoin their own session and
+ * nobody else's.
+ *
+ * It is a weak identity and it is meant to be — it stands in for "the same
+ * browser on the same connection", not for a person. Anything worth protecting
+ * belongs to a signed-in user and is compared against a verified token above.
+ * The first hop of x-forwarded-for is used for the same reason otpThrottle uses
+ * it: behind Vercel and Render, req.ip is the proxy on every request.
+ */
+function anonymousId(socket) {
+  const fwd = socket.handshake?.headers?.['x-forwarded-for'];
+  const first = Array.isArray(fwd) ? fwd[0] : String(fwd || '').split(',')[0];
+  const ip = (first || socket.handshake?.address || 'unknown').trim();
+  return `anon:${ip}`;
+}
+
+/**
+ * May this socket see the session owned by `ownerId`?
+ *
+ * A signed-in socket must be the owner. A socket with no token may only reach
+ * a session that was itself anonymous and carries the same anon: marker — never
+ * one belonging to a real account, which is the case that was leaking resumes.
+ */
+export function maySeeSession(socket, ownerId) {
+  if (!ownerId) return false;
+  if (socket.userId) return ownerId === socket.userId;
+  return ownerId.startsWith('anon:') && ownerId === socket.anonId;
+}
 
 // Persistent Memory Maps to prevent runtime data resets across socket drops
 const globalSessionMemory = new Map();
@@ -80,18 +165,73 @@ async function generateVoiceBuffer(text) {
 
 export const initializeInterviewSocket = (httpServer) => {
   const io = new Server(httpServer, {
-    cors: { origin: '*', methods: ['GET', 'POST'] },
+    /**
+     * The same allow-list the HTTP layer uses, not '*'.
+     *
+     * With credentials on the handshake, '*' let any page on the internet open
+     * an authenticated socket to this server using the visitor's own cookie.
+     */
+    cors: {
+      origin: (origin, cb) =>
+        isAllowedOrigin(origin)
+          ? cb(null, true)
+          : cb(new Error(`Origin not allowed by CORS: ${origin}`)),
+      methods: ['GET', 'POST'],
+      credentials: true,
+    },
     pingTimeout: 60000,
     pingInterval: 25000,
-    maxHttpBufferSize: 5e7
+    /**
+     * 5 MB, down from 50.
+     *
+     * The largest thing a client legitimately sends is one chunk of recorded
+     * audio. Fifty megabytes per message, accepted before any authentication
+     * happened, was an invitation to allocate the process to death from an
+     * anonymous connection.
+     */
+    maxHttpBufferSize: 5e6
   });
 
   io.on('connection', (socket) => {
+    // Resolved once per connection rather than per event: the handshake is
+    // where the credentials are, and re-reading them on every message would not
+    // make them any fresher.
+    socket.userId = identifySocket(socket);
+    socket.anonId = anonymousId(socket);
+
     console.log(`📡 [WebSocket Gateway] Stream tunnel ready for instance: ${socket.id}`);
 
     socket.on('join-interview-session', async (sessionId) => {
       try {
         if (!sessionId) return;
+
+        /**
+         * Ownership, before anything about this session is loaded.
+         *
+         * The session row is fetched first because the answer depends on who
+         * owns it, and it is fetched here rather than after the cache lookup
+         * below because the in-memory cache was itself a way past this check:
+         * a second socket joining an id already in globalSessionMemory got the
+         * history handed to it without a database read at all.
+         */
+        const owner = await prisma.interviewSession.findUnique({
+          where: { id: sessionId },
+          select: { userId: true },
+        });
+
+        if (!owner) {
+          socket.emit('engine-exception', { error: 'Target session context not found or expired.' });
+          return;
+        }
+
+        if (!maySeeSession(socket, owner.userId)) {
+          // Deliberately the same message as "not found". Distinguishing the
+          // two would turn this socket into an oracle for which interview ids
+          // exist, which is the first half of the attack it just refused.
+          socket.emit('engine-exception', { error: 'Target session context not found or expired.' });
+          return;
+        }
+
         socket.join(sessionId);
         socket.sessionId = sessionId;
 
@@ -144,6 +284,12 @@ CORE OPERATIONAL LOGIC & FEEDBACK ENGINE:
 
       } catch (err) {
         console.error('❌ Connection handshake routing error on socket context layer:', err);
+        // Say so. This branch used to log and return, so a database hiccup
+        // during the join left the client sitting on a silent socket with a
+        // spinner and no way to know the join had failed at all.
+        socket.emit('engine-exception', {
+          error: 'Could not start the interview session. Please try again.',
+        });
       }
     });
 

@@ -14,8 +14,114 @@ import {
   X,
   Save,
   UserPlus,
+  Sparkles,
 } from "lucide-react";
 import toast from "react-hot-toast";
+
+/**
+ * Per-account switch for the AI paper writer.
+ *
+ * WHAT IT ACTUALLY MOVES
+ *
+ * PATCH /api/admin/users/:id/entitlements, which adds or removes "aiGeneration"
+ * from that user's `entitlements` column. On their next request that decides
+ * four things at once: whether POST /api/tests/generate answers or returns 402,
+ * whether /GenerateTestPage renders its form or a lock screen, whether
+ * "Generate Test" appears in their navigation, and where every "generate a
+ * paper" button on the site sends them. All four read the same
+ * GET /api/features, so they cannot disagree.
+ *
+ * WHAT IT DOES NOT MOVE
+ *
+ * The site-wide default. PREMIUM_AI_GENERATION in the API's environment decides
+ * for everyone with nothing granted here, and this switch can only OPEN the
+ * feature for one person, never close it. While that variable is `on` the
+ * feature is free for everybody and this control is beside the point — it is
+ * for the normal case, where generation is paid and a named account has been
+ * given it.
+ *
+ * WHY IT IS FIXED ON FOR ADMINS
+ *
+ * The server grants every entitlement to `admin` and `superadmin` by role, so a
+ * switch that appeared to be off for them would be lying — they can generate
+ * either way. It is shown as on and disabled rather than hidden, because a blank
+ * cell reads as "not loaded yet".
+ */
+const AiAccessToggle = ({
+  user,
+  onChanged,
+}: {
+  user: any;
+  onChanged: (entitlements: string[]) => void;
+}) => {
+  const [busy, setBusy] = useState(false);
+
+  const byRole = user.role === "admin" || user.role === "superadmin";
+  const on = byRole || (user.entitlements ?? []).includes("aiGeneration");
+  const who = user.name || user.email || "this user";
+
+  const toggle = async (e: React.MouseEvent) => {
+    // The whole row is a link to the profile. Without this, granting access
+    // also navigates away from the list you were working through.
+    e.stopPropagation();
+    if (byRole || busy) return;
+
+    const granted = !on;
+    setBusy(true);
+    try {
+      const res = await api.patch(`/users/${user.id}/entitlements`, {
+        feature: "aiGeneration",
+        granted,
+      });
+      // Take the list the server returned rather than assuming ours is now
+      // right: it normalises the column, and if two admins are editing the same
+      // account this is the state that actually exists.
+      onChanged(res.data?.data?.entitlements ?? []);
+      toast.success(
+        granted ? `AI generation enabled for ${who}` : `AI generation disabled for ${who}`
+      );
+    } catch (err) {
+      // Deliberately not optimistic. A switch that flips and then flips back is
+      // worse than one that waits: the admin has already moved on believing the
+      // grant was made.
+      toast.error(handleApiError(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-3">
+      <button
+        type="button"
+        role="switch"
+        aria-checked={on}
+        aria-label={`AI paper generation for ${who}`}
+        title={
+          byRole
+            ? `${user.role}s can always generate AI papers`
+            : on
+              ? "Click to remove AI paper generation"
+              : "Click to allow AI paper generation"
+        }
+        disabled={byRole || busy}
+        onClick={toggle}
+        className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 ${
+          on ? "bg-indigo-600" : "bg-gray-300"
+        } ${byRole || busy ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}
+      >
+        <span
+          className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+            on ? "translate-x-6" : "translate-x-1"
+          }`}
+        />
+      </button>
+      <span className="text-xs font-medium text-gray-500">
+        {byRole ? `By ${user.role}` : on ? "Allowed" : "Off"}
+      </span>
+    </div>
+  );
+};
 
 export const UsersPage = () => {
   const navigate = useNavigate();
@@ -164,6 +270,12 @@ export const UsersPage = () => {
               <th className="px-6 py-4">Role & Auth</th>
               <th className="px-6 py-4">Profile Details</th>
               <th className="px-6 py-4">Status</th>
+              <th className="px-6 py-4">
+                <span className="flex items-center gap-1.5">
+                  <Sparkles size={14} className="text-indigo-500" />
+                  AI Access
+                </span>
+              </th>
               <th className="px-6 py-4 text-right">Actions</th>
             </tr>
           </thead>
@@ -171,7 +283,7 @@ export const UsersPage = () => {
             {loading ? (
               <tr>
                 <td
-                  colSpan={5}
+                  colSpan={6}
                   className="px-6 py-12 text-center text-gray-500"
                 >
                   Loading users...
@@ -180,7 +292,7 @@ export const UsersPage = () => {
             ) : users.length === 0 ? (
               <tr>
                 <td
-                  colSpan={5}
+                  colSpan={6}
                   className="px-6 py-12 text-center text-gray-400"
                 >
                   No users found matching your search.
@@ -257,6 +369,23 @@ export const UsersPage = () => {
                         <XCircle size={16} /> Pending
                       </div>
                     )}
+                  </td>
+
+                  {/* AI Access Column — see AiAccessToggle for what it moves. */}
+                  <td className="px-6 py-4">
+                    <AiAccessToggle
+                      user={user}
+                      onChanged={(entitlements) =>
+                        // Patch the one row rather than refetching the page.
+                        // A refetch re-runs the search and the pagination, and
+                        // a row that jumps or disappears under the cursor mid-
+                        // way through granting access to a list of people is
+                        // how the wrong account gets the grant.
+                        setUsers((prev) =>
+                          prev.map((u) => (u.id === user.id ? { ...u, entitlements } : u))
+                        )
+                      }
+                    />
                   </td>
 
                   {/* Actions Column */}

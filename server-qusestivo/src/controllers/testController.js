@@ -3,6 +3,36 @@ import { generateQuestionsAgent } from "../agentic-mock-test/questionGenerator.j
 import { resolvePyqExamCode } from "../lib/pyqPattern.js";
 
 /**
+ * Is this session the caller's to read?
+ *
+ * getTest, getQuestionByIndex and getTestResult each fetched a session by id
+ * and returned it to whoever asked. Between them that is the paper, every
+ * question in it, the correct answers and the candidate's own score — served to
+ * anyone holding an id. The ids are uuids, so they cannot be counted through,
+ * but they are not credentials either: they live in the address bar, in
+ * history, in a shared screenshot, in the Referer sent to any third-party asset
+ * the results page loads.
+ *
+ * A session with no userId is refused rather than shared. Sessions can be
+ * anonymous (`userId String?`), and an unowned row is precisely the one whose
+ * owner cannot be established — handing it to any signed-in caller would keep
+ * the hole open for exactly the rows that most need it closed. New sessions all
+ * carry an owner, since /tests/generate has required sign-in for some time.
+ *
+ * Written to be called immediately after the session is fetched and to send its
+ * own response, so the three handlers each gain one line rather than a branch.
+ *
+ * @returns {boolean} true when the caller may proceed.
+ */
+function ownsSession(req, res, session) {
+  if (!session.userId || session.userId !== req.userId) {
+    res.status(403).json({ success: false, error: "Not your test session" });
+    return false;
+  }
+  return true;
+}
+
+/**
  * Build a test from stored previous year questions instead of generating one.
  *
  * Serves sessionType "pyq", which the UI has offered as "Previous Year Qs" all
@@ -300,6 +330,8 @@ export async function getTest(req, res) {
       return res.status(404).json({ success: false, error: "Session not found" });
     }
 
+    if (!ownsSession(req, res, session)) return;
+
     const whereForQuestions = useNumeric ? { sessionId: maybeInt } : { sessionId: session.id };
 
     const questions = await prisma.testQuestion.findMany({
@@ -353,6 +385,11 @@ export async function submitTest(req, res) {
     const session = await prisma.testSession.findUnique({ where: sessionWhere });
     if (!session)
       return res.status(404).json({ success: false, error: "Session not found" });
+
+    // `protect` establishes that someone is signed in; it says nothing about
+    // whose paper this is. Without the check any signed-in user could post
+    // answers into another candidate's session and overwrite their attempt.
+    if (!ownsSession(req, res, session)) return;
 
     const sessionIdForQuery = session.id;
 
@@ -472,6 +509,7 @@ export async function getQuestionByIndex(req, res) {
       console.log("Session not found for where:", sessionWhere);
       return res.status(404).json({ success: false, error: "Session not found" });
     }
+    if (!ownsSession(req, res, session)) return;
     console.log("Found session.id (type):", session.id, typeof session.id);
 
     const sessionIdForQuery = useNumeric ? maybeNum : session.id;
@@ -577,6 +615,8 @@ export async function getTestResult(req, res) {
 
     const session = await prisma.testSession.findUnique({ where: sessionWhere });
     if (!session) return res.status(404).json({ success: false, error: "Session not found" });
+
+    if (!ownsSession(req, res, session)) return;
 
     const sessionIdForQuery = session.id;
 

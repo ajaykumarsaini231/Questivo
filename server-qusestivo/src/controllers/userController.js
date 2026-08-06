@@ -1,4 +1,5 @@
 import prisma from "../prismaClient.js";
+import { profileUpdateSchema } from "../middleware/validator.js";
 
 /**
  * Which history bucket a TestSession belongs to.
@@ -178,7 +179,22 @@ const AUDIENCE_IDS = ["jee-neet", "government", "college"];
 // --- ✅ NEW UPDATE FUNCTION ---
 export const updateProfile = async (req, res) => {
   const userId = req.userId;
-  const { name, bio, photoUrl, preferredMedium, audienceId, focusExam } = req.body;
+  const { audienceId, focusExam } = req.body ?? {};
+
+  /**
+   * name, bio, photoUrl and preferredMedium are checked before they are stored.
+   *
+   * They were not. audienceId was validated against a fixed list — carefully —
+   * while the four beside it went to the database exactly as they arrived: no
+   * maximum length on the name or the bio, and no requirement that photoUrl be
+   * a URL. photoUrl is the one that mattered: it is rendered as the src of the
+   * avatar in the header, so it is an attribute the browser acts on, and
+   * "any string at all" is the wrong type for that. See profileUpdateSchema.
+   */
+  const { value, error } = profileUpdateSchema.validate(req.body ?? {});
+  if (error) return res.status(400).json({ success: false, message: error.details[0].message });
+
+  const { name, bio, photoUrl, preferredMedium } = value;
 
   // Explicit null is how the profile clears a track back to "not chosen", so
   // presence has to be tested rather than truthiness — `...(audienceId && {})`
