@@ -725,10 +725,47 @@ function discard(dir, name) {
 }
 
 /** Trim, encode, and clean up whichever pixmap the trim produced. */
+/**
+ * Breathing room above and below the question, in points.
+ *
+ * A crop trimmed hard to its ink reads on screen as though the question has
+ * been clipped — the first line touches the top edge and the last option the
+ * bottom, and a candidate cannot tell a tight crop from a truncated one.
+ *
+ * Added as white margin AFTER the ink trim, deliberately, and never by widening
+ * the band. Widening it would reach past the answer line or up into the
+ * question above — which is the entire class of defect this file exists to
+ * prevent, and how a worked solution and an "Ans. (3)" ended up inside crops
+ * before. Whitespace added to the rendered image cannot reach anything.
+ */
+const CROP_MARGIN_PT = 25;
+
+/** Same image with a white band above and below. */
+function padVertically(pix, marginPx) {
+  const w = pix.getWidth();
+  const h = pix.getHeight();
+  if (!w || !h || marginPx <= 0) return pix;
+
+  const out = new mupdf.Pixmap(mupdf.ColorSpace.DeviceGray, [0, 0, w, h + marginPx * 2], false);
+  out.clear(255);
+  // Both views taken after the allocation, for the reason trimToInk documents:
+  // an allocation can grow the wasm heap and detach every view onto the old one.
+  const src = pix.getPixels();
+  const dst = out.getPixels();
+  const srcStride = pix.getStride();
+  const dstStride = out.getStride();
+  for (let y = 0; y < h; y++) {
+    dst.set(src.subarray(y * srcStride, y * srcStride + w), (y + marginPx) * dstStride);
+  }
+  return out;
+}
+
 function toTrimmedPNG(pix, trimSides = true) {
   const trimmed = trimToInk(pix, trimSides);
   if (!trimmed) return null;
-  const png = trimmed.asPNG();
+  const padded = padVertically(trimmed, Math.round(CROP_MARGIN_PT * SCALE));
+  const png = padded.asPNG();
+  if (padded !== trimmed) padded.destroy?.();
   if (trimmed !== pix) trimmed.destroy?.();
   return png;
 }
