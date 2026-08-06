@@ -35,6 +35,8 @@ import fs from "node:fs";
 import path from "node:path";
 import * as mupdf from "mupdf";
 
+import { documentFurniture, pageDrawings, classifyRegion } from "./regionInk.mjs";
+
 /** Rendered at 2x so the maths stays sharp on a retina screen. */
 const SCALE = 2;
 /** Trim the advertising footer off a crop, when the page does not name one. */
@@ -129,25 +131,61 @@ const OPTION_MARK = /(?:^|\s)\(\s*([1-4A-D])\s*\)/g;
  */
 const NOT_A_QUESTION = /^Q\s*\.\s*\d{1,3}\s*(?:[–—-]|to\b)\s*Q\s*\.\s*\d{1,3}/i;
 
-/** Questions per subject on a JEE Main paper: 20 in Section A, 10 in Section B. */
-const SUBJECT_SPAN = 30;
+/**
+ * How many consecutive numbers make a run long enough to be a paper's own
+ * numbering rather than a coincidence.
+ *
+ * Half a subject. Long enough that no stray "2." inside a worked solution can
+ * assemble a rival run, short enough to still recognise a booklet that only
+ * holds one section.
+ */
+const MIN_NUMBERING_RUN = 12;
+/**
+ * Consecutive numbers that may be missing inside one run.
+ *
+ * A question whose number is drawn rather than typed leaves a hole in an
+ * otherwise perfect sequence, and should not split the run in two.
+ */
+const MAX_NUMBERING_GAP = 2;
 
 /**
- * The lowest number that starts a near-complete run of `span` consecutive ones.
+ * The number this file starts its questions at.
  *
  * A booklet numbered 61..90 returns 61; one that restarts its numbering at each
- * section has no such run and returns null. Two anchors are allowed to be
- * missing, because a question whose number is drawn rather than typed leaves a
- * hole in an otherwise perfect run and should not veto the detection.
+ * section has no single run and returns null, which sends the caller to the
+ * printed-number-plus-occurrence path instead.
+ *
+ * Measured as the longest run present, NOT as a run of a fixed length. It was
+ * a fixed 30 — a JEE Main subject being 20 questions in Section A and 10 in
+ * Section B — and 2025 changed the paper: Section B dropped to 5, so a subject
+ * is 25 questions and the ALLEN booklets number Physics 26..50, Chemistry
+ * 51..75, Maths 1..25. No run of 30 exists in any of them, so this returned
+ * null for every 2025 and 2026 file, every question fell through to the
+ * printed number, and a Chemistry booklet that starts at 51 was asked for
+ * question 1 — which it does not print. What answered instead was "1.5",
+ * inside the worked solution of question 54, and that is the picture 579
+ * questions were published with.
+ *
+ * Deriving it means the next time the board changes the paper this reads the
+ * new shape off the page instead of quietly mis-addressing a year.
  */
-function contiguousBase(numbers, span) {
+function numberingBase(numbers) {
   const set = new Set(numbers);
+  let bestBase = null;
+  let bestLen = 0;
+  // Ascending, and strictly-greater below, so the SMALLEST base wins a tie —
+  // every run also contains a shorter run starting one later.
   for (const base of [...set].sort((a, b) => a - b)) {
-    let found = 0;
-    for (let i = 0; i < span; i++) if (set.has(base + i)) found++;
-    if (found >= span - 2) return base;
+    let n = base;
+    let len = 0;
+    let gap = 0;
+    while (gap <= MAX_NUMBERING_GAP) {
+      if (set.has(n)) { len = n - base + 1; gap = 0; } else gap++;
+      n++;
+    }
+    if (len > bestLen) { bestBase = base; bestLen = len; }
   }
-  return null;
+  return bestLen >= MIN_NUMBERING_RUN ? bestBase : null;
 }
 
 /**
@@ -641,10 +679,18 @@ export function extractFigures({ pdfPath, outDir, wanted, mode, fullWidth = fals
   // MathonGo prints "Q12."; ALLEN prints "12." at the head of its column; GATE
   // prints "Q.12" — the dot on the other side of the number, which neither of
   // the other two patterns matches.
+  //
+  // The ALLEN pattern refuses a digit after the dot, because a bare number and
+  // a dot is also what the first half of a decimal looks like. Its booklets
+  // print the question and its worked solution on the same page, and a
+  // solution is full of them: an electronegativity table reading "1.5 2 2.5 3
+  // 3.5 4.0" contributed four anchors — questions 1, 2, 3 and 4 — to a file
+  // whose questions are numbered 51 to 75. The other two patterns need no such
+  // guard: both require a literal "Q" that no number in a solution carries.
   const pattern =
     mode === "gate" ? /^Q\s*\.\s*(\d{1,3})\b/
     : mode === "mathongo" ? /^Q\s*(\d{1,3})\s*\./
-    : /^(\d{1,3})\s*\./;
+    : /^(\d{1,3})\s*\.(?!\d)/;
 
   // GATE has printed its choices as "(A)".."(D)" in every paper of this
   // archive — the text parser splits on nothing else, and all 325 questions
@@ -679,7 +725,7 @@ export function extractFigures({ pdfPath, outDir, wanted, mode, fullWidth = fals
   // found nothing, and reported 802 questions "not located" without any hint as
   // to why. So the base is read off the page — the smallest number that starts
   // a near-complete run of 30 — and questions are addressed from it.
-  const anchorBase = contiguousBase([...byNumber.keys()], SUBJECT_SPAN);
+  const anchorBase = numberingBase([...byNumber.keys()]);
 
   // Decided once for the file, from every question number in it. Per page it
   // would read a page whose second column happens to start below the fold as
@@ -699,6 +745,20 @@ export function extractFigures({ pdfPath, outDir, wanted, mode, fullWidth = fals
   fs.mkdirSync(outDir, { recursive: true });
   let written = 0;
   const missing = [];
+
+  // Which regions genuinely need to BE a picture, rather than merely having
+  // one available. The crop is still cut either way — the image stays on the
+  // row as the fallback for when the extracted text is wrong — but a caller
+  // that can publish text should know when it may. See lib/regionInk.mjs.
+  //
+  // The furniture pass reads every page once, so it is done here rather than
+  // per question.
+  const furniture = documentFurniture(doc);
+  const drawingsByPage = new Map();
+  const drawingsFor = (index, pageObj) => {
+    if (!drawingsByPage.has(index)) drawingsByPage.set(index, pageDrawings(pageObj, furniture));
+    return drawingsByPage.get(index);
+  };
 
   for (const w of wanted) {
     const a = locate(w);
@@ -952,6 +1012,18 @@ export function extractFigures({ pdfPath, outDir, wanted, mode, fullWidth = fals
     // of "not readable".
     mine.optionsInStem = wantedOptions && !complete;
 
+    // Does the question NEED to be shown as a picture, or is its text the whole
+    // of it? Measured over the stem's own rectangle, and given the text the
+    // caller extracted for it so a region that drew nothing but whose text
+    // came out empty is still marked.
+    const ink = drawingsFor(a.page, page);
+    const geometry = { pageW: a.pageW, pageH: a.pageH };
+    mine.question = classifyRegion(
+      ink,
+      [colX0, bandTop, colX1, stemBottom > bandTop ? stemBottom : bandBottom],
+      { ...geometry, text: w.stemText ?? "" }
+    );
+
     // ── solution ─────────────────────────────────────────────────────────
     if (w.wantSolution) {
       const sol = solutions
@@ -960,7 +1032,14 @@ export function extractFigures({ pdfPath, outDir, wanted, mode, fullWidth = fals
       if (sol) {
         const solEnd = nextQ && nextQ.y > sol.y ? nextQ.y - 2 : contentBottom(a.page, a.pageH);
         if (solEnd - sol.y >= MIN_HEIGHT_PT) {
-          mine.solution = write(`${w.baseName}_S.png`, [colX0, Math.max(0, sol.y - PAD), colX1, solEnd]);
+          const solRect = [colX0, Math.max(0, sol.y - PAD), colX1, solEnd];
+          mine.solution = write(`${w.baseName}_S.png`, solRect);
+          // Judged separately from the question, because they differ far more
+          // often than not: a stem of two lines of algebra whose solution is
+          // worked out on a graph is the ordinary case, not the exception.
+          mine.solutionInk = classifyRegion(drawingsFor(a.page, page), solRect, {
+            pageW: a.pageW, pageH: a.pageH, text: w.solutionText ?? "",
+          });
         }
       }
     }

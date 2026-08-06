@@ -76,6 +76,51 @@ const SHIFT_TIMES = {
   2: { label: "Shift 2", time: "3:00 PM – 6:00 PM", slot: "Evening" },
 };
 
+/**
+ * How many questions a paper of this year holds, and how they are divided.
+ *
+ * Not a constant, because the board has changed it twice:
+ *
+ *   2020        25 per subject — 20 MCQ, then 5 numerical, all compulsory
+ *   2021-2024   30 per subject — 20 MCQ, then 10 numerical of which any 5
+ *               were to be attempted
+ *   2025-       25 per subject — Section B cut back to 5, again compulsory
+ *
+ * It was hard-coded at 30, and everything downstream inherited that. For 2025
+ * it meant the shape check failed on every file, and then the gap backfill
+ * invented five questions per subject that the paper does not contain — 285
+ * rows with no stem, no options, no key and no image, sitting in the bank
+ * beside the real ones.
+ *
+ * The marks are unchanged: 300 either way, at +4/-1.
+ */
+function paperShape(year) {
+  const perSubject = year >= 2025 || year <= 2020 ? 25 : 30;
+  return { perSubject, mcq: 20, numerical: perSubject - 20, perPaper: perSubject * 3 };
+}
+
+/** Where a subject's questions start in the 1-N palette of the whole paper. */
+const subjectOffset = (subject, shape) =>
+  ({ Physics: 0, Chemistry: shape.perSubject, Mathematics: shape.perSubject * 2 })[subject];
+
+/** The marker a stem too thin to read is rewritten with. */
+const CITATION_STEM = "[Shown as an image]";
+
+/**
+ * The real extracted text, or "" when all that is left is the citation.
+ *
+ * Anything that decides whether a question can be published as text has to see
+ * what was actually recovered from the paper, not the sentence that says
+ * nothing was.
+ */
+function citationOnly(text) {
+  const value = (text ?? "").trim();
+  if (!value.startsWith(CITATION_STEM)) return value;
+  // "…(Section A) — <the little that did extract>" keeps its tail.
+  const tail = value.split(" — ").slice(1).join(" — ").trim();
+  return tail;
+}
+
 const MONTHS = { Jan: 1, Feb: 2, Mar: 3, Apr: 4, May: 5, Jun: 6, Jul: 7, Aug: 8, Sep: 9, Oct: 10, Nov: 11, Dec: 12 };
 const MONTH_FULL = {
   1: "January", 2: "February", 3: "March", 4: "April", 5: "May", 6: "June",
@@ -277,9 +322,22 @@ function toRow(q, facets, { subject, section, numberInSubject, paperNumber, answ
   // wrong answer to a dimensions question — so folding them in at equal weight
   // pulls the score into a tie and the tagger, correctly, refuses to guess.
   // Judging the stem alone recovers those.
+  //
+  // The worked solution is the last resort, and it is what covers the
+  // questions that are a picture. A stem printed as a circuit diagram or a
+  // reaction scheme has no words for a keyword table to match, so it went
+  // untagged and dropped out of every topic filter and every frequency count —
+  // and those are disproportionately the questions a candidate most wants to
+  // find by chapter. Its solution names the method in prose: "moment of
+  // inertia about the axis", "esterification", "de Broglie wavelength".
+  //
+  // Weaker evidence than the stem, deliberately ranked below it: a solution
+  // may reach for a technique that belongs to another chapter. Ranked above
+  // nothing, which is what these rows had.
   const tagged =
     tagTopic(q.questionText, EXAM_CODE, subject) ??
-    tagTopic(`${q.questionText} ${Object.values(q.options || {}).join(" ")}`, EXAM_CODE, subject);
+    tagTopic(`${q.questionText} ${Object.values(q.options || {}).join(" ")}`, EXAM_CODE, subject) ??
+    tagTopic(solution ?? "", EXAM_CODE, subject);
 
   return {
     ...facets,
@@ -340,6 +398,14 @@ function toRow(q, facets, { subject, section, numberInSubject, paperNumber, answ
     solutionImage: null,
     diagramImage: null,
     diagramSource: null,
+    // Filled by the figure pass — see lib/regionInk.mjs. Whether the crop IS
+    // the question or is a spare copy of it, and what kind of content decided
+    // that. Defaulted to "needs the picture" so a question the figure pass
+    // never reached is never published as text nobody checked.
+    questionNeedsImage: true,
+    questionContentKind: "unreadable",
+    solutionNeedsImage: true,
+    solutionContentKind: "unreadable",
     languages: ["en"],
 
     sourceUrl: sourceFile,
@@ -424,7 +490,33 @@ async function main() {
 
   for (const d of usable.filter((x) => x.kind === "allen")) {
     const parsed = parseAllenSolution(await readPdf(dir, d.file));
-    if (parsed.length !== 30) problems.push(`${d.file}: parsed ${parsed.length} questions, expected 30`);
+    const shape = paperShape(d.year);
+    if (parsed.length !== shape.perSubject) {
+      problems.push(`${d.file}: parsed ${parsed.length} questions, expected ${shape.perSubject}`);
+    }
+
+    // MORE questions than the paper holds means the segmentation slipped, and
+    // everything after the slip is attributed to the wrong question — stems
+    // that begin mid-solution ("Conceptual Ans. (4) 32. The amount of work
+    // done..."), and, worse, answer keys belonging to a neighbour. A wrong key
+    // is not a degraded question, it is a question that teaches the wrong
+    // answer, so this file's text is not used at all.
+    //
+    // Nothing is lost that was right: the figure pass reads the page geometry
+    // rather than this segmentation, so its crops are unaffected, and the gap
+    // backfill below turns the whole subject into figure-only rows. The
+    // candidate sees the real question and is not told a false key.
+    //
+    // Too FEW is the opposite case and is kept: those questions are correct as
+    // far as they go, and the ones that did not parse get backfilled the same
+    // way.
+    if (parsed.length > shape.perSubject) {
+      problems.push(
+        `${d.file}: segmentation slipped (${parsed.length} > ${shape.perSubject}) — ` +
+          `text and keys from this file are discarded; its questions become figure-only`
+      );
+      continue;
+    }
 
     const facets = paperFacets(d);
     for (const q of parsed) {
@@ -463,8 +555,13 @@ async function main() {
 
   for (const d of usable.filter((x) => x.kind === "mathongo")) {
     const { questions, key } = parseMathonGoPaper(await readPdf(dir, d.file));
-    if (questions.length !== 90) problems.push(`${d.file}: parsed ${questions.length} questions, expected 90`);
-    if (key.size !== 90) problems.push(`${d.file}: answer key has ${key.size} entries, expected 90`);
+    const shape = paperShape(d.year);
+    if (questions.length !== shape.perPaper) {
+      problems.push(`${d.file}: parsed ${questions.length} questions, expected ${shape.perPaper}`);
+    }
+    if (key.size !== shape.perPaper) {
+      problems.push(`${d.file}: answer key has ${key.size} entries, expected ${shape.perPaper}`);
+    }
 
     const facets = paperFacets(d);
     for (const [n, value] of key) mathonGoKeys.set(`${facets.paperId}|${n}`, value);
@@ -475,29 +572,34 @@ async function main() {
     // the answer key keeps the exam's own order, so reading key[q.number] hands
     // a numerical question an option number. See lib/sectionKeys.mjs.
     const keyed = new Map();
-    for (const [base, lo, hi] of [[0, 1, 30], [30, 31, 60], [60, 61, 90]]) {
+    const blocks = ["Physics", "Chemistry", "Mathematics"].map((subject) => {
+      const base = subjectOffset(subject, shape);
+      return [base, base + 1, base + shape.perSubject];
+    });
+    for (const [base, lo, hi] of blocks) {
       const found = new Map(questions.filter((q) => q.number >= lo && q.number <= hi).map((q) => [q.number, q]));
       if (!found.size) continue;
 
-      // Assign over the FULL thirty, filling the gaps with placeholders.
+      // Assign over the subject's FULL span, filling the gaps with
+      // placeholders.
       //
       // A question whose number is drawn rather than typeset is absent here but
-      // gets backfilled further down, so the subject really does have thirty.
-      // Assigning over only the ones that parsed made the count 26 rather than
-      // 30, the shape check failed, and the whole subject lost its keys — even
-      // though the placeholders are exactly what the 20-and-10 constraint needs
-      // to resolve the rest.
+      // gets backfilled further down, so the subject really does have its full
+      // count. Assigning over only the ones that parsed made the count 26
+      // rather than 30, the shape check failed, and the whole subject lost its
+      // keys — even though the placeholders are exactly what the MCQ-and-
+      // numerical constraint needs to resolve the rest.
       const block = [];
       for (let n = lo; n <= hi; n++) {
         block.push(found.get(n) ?? { number: n, questionText: "", options: null, placeholder: true });
       }
 
-      const { assigned, interleaved, trustworthy, mcqCount, numCount } = assignSectionsAndKeys(block, base, key);
+      const { assigned, interleaved, trustworthy, mcqCount, numCount } = assignSectionsAndKeys(block, base, key, shape);
       if (interleaved && !trustworthy) {
         problems.push(
           `${d.file}: ${block[0].subject} interleaves numericals and its shape could not be ` +
             `reproduced (${mcqCount} MCQ + ${numCount} numerical of ${block.length}, expected ` +
-            `20 + 10) — keys that cannot be matched are dropped rather than guessed`
+            `${shape.mcq} + ${shape.numerical}) — keys that cannot be matched are dropped rather than guessed`
         );
       }
       for (const a of assigned) keyed.set(a.number, a);
@@ -511,7 +613,7 @@ async function main() {
       const row = toRow(q, facets, {
         subject: q.subject,
         section: k?.section ?? q.section,
-        numberInSubject: k?.numberInSubject ?? ((q.number - 1) % 30) + 1,
+        numberInSubject: k?.numberInSubject ?? ((q.number - 1) % shape.perSubject) + 1,
         paperNumber: q.number,
         answerRaw: k ? k.answerRaw : key.get(q.number),
         fromOptionNumber: k ? k.fromOptionNumber : true,
@@ -546,12 +648,13 @@ async function main() {
 
   /* ---------------------------- gap backfill ----------------------------- */
 
-  // Every JEE Main paper is 90 questions and every subject is 30. Where a
-  // question's number is itself drawn rather than typeset there is no "Q56." in
-  // the text layer to find, and it would simply be absent — leaving a hole in
-  // the palette and a paper that scores out of less than 300.
+  // A paper is a fixed number of questions and every subject the same share of
+  // them — see paperShape. Where a question's number is itself drawn rather
+  // than typeset there is no "Q56." in the text layer to find, and it would
+  // simply be absent — leaving a hole in the palette and a paper that scores
+  // out of less than 300.
   //
-  // The answer key still has all 90, and the paper's shape is fixed, so the
+  // The answer key still has them all, and the paper's shape is known, so the
   // missing entries are reconstructed as figure-only rows. The candidate sees
   // the scan; the paper stays whole. Consistent with the rest of this script:
   // nothing is dropped, incomplete things are marked.
@@ -561,10 +664,11 @@ async function main() {
   for (const d of usable) {
     const facets = paperFacets(d);
     const subjects = d.kind === "allen" ? [d.subject] : ["Physics", "Chemistry", "Mathematics"];
+    const shape = paperShape(d.year);
 
     for (const subject of subjects) {
-      const offset = { Physics: 0, Chemistry: 30, Mathematics: 60 }[subject];
-      for (let n = 1; n <= 30; n++) {
+      const offset = subjectOffset(subject, shape);
+      for (let n = 1; n <= shape.perSubject; n++) {
         const key = `${facets.paperId}|${subject}|${n}`;
         if (bySlot.has(key)) continue;
         // An ALLEN booklet covers one subject; a MathonGo paper covers all
@@ -596,15 +700,15 @@ async function main() {
 
   /* -------------------------- palette numbering -------------------------- */
 
-  // The NTA player's question palette runs 1-90 across the whole paper, not
-  // 1-30 within a subject. MathonGo's compilations already number that way;
-  // ALLEN's booklets are one file per subject and only know 1-30. Derive it for
-  // everything from the fixed section order so the palette is consistent no
-  // matter which source a question came from.
-  const SUBJECT_OFFSET = { Physics: 0, Chemistry: 30, Mathematics: 60 };
+  // The NTA player's question palette runs across the whole paper, not within
+  // a subject. MathonGo's compilations already number that way; ALLEN's
+  // booklets are one file per subject and only know their own 1-N. Derive it
+  // for everything from the fixed section order so the palette is consistent
+  // no matter which source a question came from — and from the year's own
+  // shape, so a 2025 paper's Chemistry starts at 26 rather than at 31.
   for (const r of rows) {
     if (r.paperQuestionNumber == null) {
-      r.paperQuestionNumber = SUBJECT_OFFSET[r.subject] + r.questionNumber;
+      r.paperQuestionNumber = subjectOffset(r.subject, paperShape(r.year)) + r.questionNumber;
     }
   }
 
@@ -644,7 +748,7 @@ async function main() {
       // this thin, so rewriting the stem cannot move the upsert key.
       if (r.questionText.replace(/\s+/g, " ").trim().length < 25) {
         r.questionText =
-          `[Shown as an image] ${r.examName} ${r.year} · ${r.dateLabel} ${r.shiftLabel} · ` +
+          `${CITATION_STEM} ${r.examName} ${r.year} · ${r.dateLabel} ${r.shiftLabel} · ` +
           `${r.subject} Q${r.questionNumber} (Section ${r.section})` +
           (r.questionText.trim() ? ` — ${r.questionText.trim()}` : "");
       }
@@ -693,18 +797,43 @@ async function main() {
             // section, so Section B's "7." is the SECOND time 7 appears.
             printedNumber: printedOf(r, d.kind),
             occurrence: d.kind === "allen" && r.section === "B" ? 2 : 1,
-            // Where the question sits in its SUBJECT, 1-30. The figure pass
-            // needs this because ALLEN's booklets do not all number the same
-            // way: 2022's restart at each section while 2023's run 61-90
-            // across the paper. It reads the base off the page and counts from
-            // there; `printedNumber` above stays as the fallback.
-            subjectNumber: r.questionNumber,
+            // Where the question sits in its SUBJECT. The figure pass needs
+            // this because ALLEN's per-subject booklets do not all number the
+            // same way: 2022's restart at each section, 2023's run 61-90, and
+            // 2025's run 26-50 for Physics and 51-75 for Chemistry. It reads
+            // the base off the page and counts from there; `printedNumber`
+            // above stays as the fallback.
+            //
+            // ALLEN only. A MathonGo file is the WHOLE paper, numbered 1-90
+            // straight through, so its printed number is already the absolute
+            // one and there is no subject numbering to reconcile — but this
+            // was sent for those files too, and a subject base of 1 made
+            // "Chemistry question 1" resolve to printed question 1, which is
+            // Physics. Every Chemistry and Mathematics crop in every MathonGo
+            // paper was a picture of the Physics question with the same
+            // position: 2023's Maths Q1 was published showing "Q1. hello dummy
+            // text", the placeholder that paper opens with. Physics was right,
+            // which is exactly why it went unnoticed.
+            subjectNumber: d.kind === "allen" ? r.questionNumber : undefined,
             baseName: r.figureBase,
             // A numerical question prints no options; looking for markers in
             // its stem would cut it in half at a stray "(1)".
             wantOptions: r.questionType === "mcq_single",
             // Only the solution booklets print one.
             wantSolution: d.kind === "allen",
+            // What was extracted for this question, so the figure pass can
+            // judge "needs to be a picture" on the text as well as the ink: a
+            // region that drew nothing but whose text came out empty needs the
+            // picture just as much as one holding a graph.
+            //
+            // The citation stem is not text for this purpose. Rows too thin to
+            // read have already had "[Shown as an image] JEE Main 2025 · ..."
+            // written over them so they are identifiable in a list, and that
+            // is sixty characters of paper coordinates saying nothing about
+            // the question. Counting it marked 172 questions as publishable
+            // text whose text is the sentence announcing they have none.
+            stemText: citationOnly(r.questionText),
+            solutionText: r.solution ?? "",
           })),
         });
         figuresWritten += written;
@@ -727,6 +856,25 @@ async function main() {
           r.optionCImage = p.options?.C ?? null;
           r.optionDImage = p.options?.D ?? null;
           r.solutionImage = p.solution ?? null;
+
+          // Whether the picture is the question or merely a copy of it.
+          //
+          // The crop is cut and kept either way; this says which one the app
+          // should LEAD with. "figure"/"image" mean the meaning is in the
+          // drawing — a graph, a structure, a circuit — and the text alone
+          // would not be answerable. "text"/"table" mean the extracted text is
+          // the question and should be published as text: selectable,
+          // searchable, readable aloud, and able to reflow on a phone.
+          // "unreadable" is the fallback that was previously assumed for
+          // everything.
+          if (p.question) {
+            r.questionNeedsImage = p.question.needsImage;
+            r.questionContentKind = p.question.category;
+          }
+          if (p.solutionInk) {
+            r.solutionNeedsImage = p.solutionInk.needsImage;
+            r.solutionContentKind = p.solutionInk.category;
+          }
         }
       } catch (e) {
         problems.push(`${file}: figure pass failed — ${e.message}`);

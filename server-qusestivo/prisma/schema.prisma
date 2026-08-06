@@ -302,6 +302,29 @@ model PreviousYearQuestion {
   /// The worked solution, for sources that print one.
   solutionImage String?
 
+  // ──────────── whether the picture IS the question, or a copy of it ────────
+  //
+  // Every question is cropped, but most do not need to be READ as a picture.
+  // scripts/lib/regionInk.mjs replays the source page through mupdf and looks
+  // at what was DRAWN there, which separates the two cases exactly: a graph, a
+  // benzene ring or a circuit carries meaning no text can, while a fraction
+  // bar, a table rule and a radical's vinculum are typography around text that
+  // says everything. Where the text is the question, the text is what should be
+  // published — selectable, searchable, readable aloud, and able to reflow on a
+  // phone — with the crop kept behind it as the fallback.
+
+  /// True when the meaning is in the drawing and the text alone is not
+  /// answerable. False means publish the text and keep the image in reserve.
+  questionNeedsImage  Boolean @default(true)
+  /// Why: "figure" (vector artwork), "image" (a raster illustration), "table"
+  /// (a grid, still text), "text" (nothing drawn), "unreadable" (nothing drawn
+  /// and no text recovered either).
+  questionContentKind String  @default("unreadable")
+  /// The same two, judged separately for the worked solution — a two-line stem
+  /// whose answer is worked out on a graph is the ordinary case.
+  solutionNeedsImage  Boolean @default(true)
+  solutionContentKind String  @default("unreadable")
+
   /// Crop windows applied to the images above when they are drawn.
   ///
   /// `{ "optionDImage": { "top": 0, "right": 0, "bottom": 62.4, "left": 0 } }` —

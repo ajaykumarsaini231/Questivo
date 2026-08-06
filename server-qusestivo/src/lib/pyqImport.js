@@ -336,6 +336,16 @@ export function validatePyqRow(row, ctx = {}, index = 0) {
       optionCImage: served(row.optionCImage),
       optionDImage: served(row.optionDImage),
       solutionImage: served(row.solutionImage),
+
+      // Whether that picture IS the question or merely a copy of it — see the
+      // schema. Absent from a source that predates the classifier, and the
+      // default there has to be "needs the picture": publishing text nothing
+      // has vouched for is the one failure this must not introduce.
+      questionNeedsImage: row.questionNeedsImage !== false,
+      questionContentKind: str(row.questionContentKind) ?? "unreadable",
+      solutionNeedsImage: row.solutionNeedsImage !== false,
+      solutionContentKind: str(row.solutionContentKind) ?? "unreadable",
+
       languages: Array.isArray(row.languages) && row.languages.length ? row.languages : ["en"],
 
       sourceUrl: row.sourceUrl || ctx.sourceUrl || null,

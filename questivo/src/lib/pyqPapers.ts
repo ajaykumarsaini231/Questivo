@@ -108,25 +108,48 @@ export interface PyqPaperQuestion {
    * Set per question in the admin question bank. See `renderMode` below.
    */
   renderAs: "image" | "text" | null;
+  /**
+   * Whether the meaning of this question is in its drawing.
+   *
+   * Decided at import from what the source page actually DREW there — a graph,
+   * a structure, a circuit — as against typography that merely looks drawn,
+   * like a fraction bar or a table rule. See scripts/lib/regionInk.mjs.
+   * Absent on rows imported before the classifier existed, where it reads as
+   * "yes" and nothing changes.
+   */
+  questionNeedsImage?: boolean;
+  /** "figure" | "image" | "table" | "text" | "unreadable". */
+  questionContentKind?: string | null;
   sourceUrl: string | null;
 }
 
 /**
  * Which of a question's two forms to draw, resolved once for the whole question.
  *
- * The rule the archive was imported under is "the crop wins": what the board
- * printed is authoritative and the extracted text is a transcription of it. The
- * override says otherwise, and "text" only means anything when there IS text —
- * pinning a figure-only question to text would draw an empty question, so the
- * fallback is always the form that actually exists.
+ * Three rules, in order of how much each one knows.
+ *
+ * 1. The operator's override, set per question in the admin bank. Somebody
+ *    looked at this one.
+ * 2. What the source page drew. Every question carries a crop, so "has a crop"
+ *    never distinguished anything — it drew a stem of plain algebra as a
+ *    screenshot: unselectable, unsearchable, silent to a screen reader, and
+ *    unable to reflow on a phone. `questionNeedsImage: false` means the page
+ *    drew nothing that the text does not already say, so the text is the
+ *    better rendering and the crop stays behind it.
+ * 3. Whatever exists. A question with no usable text has to be its picture.
+ *
+ * "text" only ever means anything when there IS text — pinning a figure-only
+ * question to text would draw an empty question — so every branch checks.
  */
 export function renderMode(q: {
   renderAs?: "image" | "text" | null;
   questionText?: string | null;
   questionImage?: string | null;
+  questionNeedsImage?: boolean;
 }): "image" | "text" {
   if (q.renderAs === "text" && q.questionText?.trim()) return "text";
   if (q.renderAs === "image" && q.questionImage) return "image";
+  if (q.questionNeedsImage === false && q.questionText?.trim()) return "text";
   return q.questionImage ? "image" : "text";
 }
 

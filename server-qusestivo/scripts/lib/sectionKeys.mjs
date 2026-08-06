@@ -33,20 +33,28 @@
 /** "The value of x ______." — three or more underscores. */
 const BLANK = /_{3,}/;
 
-/** Each subject's 30 questions: 20 multiple choice, then 10 numerical. */
-const MCQ_PER_SUBJECT = 20;
-const NUM_PER_SUBJECT = 10;
+/**
+ * A subject's shape: multiple choice first, numerical after.
+ *
+ * The default is the 2021-2024 paper. It is a default and not a constant
+ * because the board has changed the split — 2025 cut Section B from ten
+ * questions to five — and a caller that knows the year says so.
+ */
+const DEFAULT_SHAPE = { mcq: 20, numerical: 10 };
 
 /**
  * Re-derive section, question type and answer key for one subject's questions.
  *
  * @param {Array} questions  the subject's questions, in printed order, each
  *                           with `{ number, questionText, options }`
- * @param {number} base      key offset for this subject: 0, 30 or 60
- * @param {Map<number,string>} key  printed answer key, 1-90
+ * @param {number} base      key offset for this subject: 0, N or 2N
+ * @param {Map<number,string>} key  printed answer key for the whole paper
+ * @param {{mcq:number, numerical:number}} [shape]  this year's split
  * @returns {{assigned: Array, interleaved: boolean, trustworthy: boolean}}
  */
-export function assignSectionsAndKeys(questions, base, key) {
+export function assignSectionsAndKeys(questions, base, key, shape = DEFAULT_SHAPE) {
+  const MCQ_PER_SUBJECT = shape.mcq;
+  const NUM_PER_SUBJECT = shape.numerical;
   // Three states, not two.
   //
   //   definitely MCQ       — options were extracted

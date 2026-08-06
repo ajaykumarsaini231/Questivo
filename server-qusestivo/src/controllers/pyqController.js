@@ -406,6 +406,11 @@ export const getPyqPaper = async (req, res) => {
         // mis-cut question would be silently ignored on the one screen it was
         // made for.
         renderAs: true,
+        // Whether the crop IS the question or a spare copy of it, so the
+        // player can publish text where the page drew nothing the text does
+        // not already say. Without it every question renders as a picture.
+        questionNeedsImage: true,
+        questionContentKind: true,
         sourceUrl: true,
       },
     });
@@ -1189,6 +1194,8 @@ const REVIEW_SELECT = {
   // That goes for how much of each crop is shown as much as for which form wins.
   imageCrops: true,
   renderAs: true,
+  questionNeedsImage: true,
+  questionContentKind: true,
   sourceUrl: true,
   year: true,
 };
