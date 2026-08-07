@@ -1,0 +1,80 @@
+# Keeps the Render backend from spinning down.
+#
+# WHY THIS EXISTS
+#
+# The API runs on a Render free instance, which stops after ~15 minutes with no
+# traffic and then takes the better part of a minute to boot again. The site
+# already wakes it on every page load — AudienceProvider and Header both fire
+# /api/auth/me on mount — but that only starts the boot *after* a visitor has
+# arrived, so the first person through the door pays the whole wait. This runs
+# ahead of them.
+#
+# WHY THE SCHEDULE IS NOT 24/7
+#
+# Render's free tier grants 750 instance-hours per *account* per month, and an
+# instance that never sleeps burns ~730 of them — no margin, and nothing left
+# for any second free service. The window below is 01:00-18:55 UTC, which is
+# 06:30 to 00:25 IST: roughly 548 hours a month, so the backend is warm for
+# every hour anyone is realistically using it and asleep through the dead of
+# night, when a single cold start costs one visitor and saves the budget.
+#
+# WHY TWO REQUESTS
+#
+# `/` is a bare res.send in server.js and only wakes the Node process. The
+# Prisma pool in src/prismaClient.js is still cold at that point, so the first
+# real query pays connection setup on top. /api/pyq/exams is public, uncapped
+# and a plain indexed read, which makes it the cheapest way to open the pool.
+#
+# HOW RELIABLE THIS IS
+#
+# Not completely. GitHub runs `schedule` triggers on a best-effort basis and
+# routinely delays them by 5-20 minutes when the shared runner pool is busy,
+# so some gaps will still exceed Render's 15-minute idle timer and it will nap.
+# Every five minutes is deliberately tighter than needed to absorb that. If the
+# naps still show up, an external pinger (cron-job.org, UptimeRobot) fires on
+# time in a way this cannot.
+#
+# GitHub also disables scheduled workflows in a repository with no commits for
+# 60 days. If the backend starts sleeping again after a quiet stretch, check
+# the Actions tab before you go looking for a bug.
+
+name: Keep Render warm
+
+on:
+  schedule:
+    - cron: "*/5 1-18 * * *"
+  workflow_dispatch:
+
+# A delayed trigger can otherwise land on top of the run before it.
+concurrency:
+  group: keep-render-warm
+  cancel-in-progress: false
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Wake the process
+        # --max-time is generous because a cold boot is the case this is here
+        # for: a 10-second timeout would give up during exactly the wait it is
+        # supposed to be absorbing. The retries cover Render's proxy answering
+        # 502 while the instance is still coming up.
+        run: |
+          curl --fail --silent --show-error \
+               --retry 3 --retry-all-errors --retry-delay 10 \
+               --max-time 90 \
+               --output /dev/null \
+               --write-out 'root: %{http_code} in %{time_total}s\n' \
+               https://questivo.onrender.com/
+
+      - name: Warm the database pool
+        # Not --fail: the process is already up by here, which is the point of
+        # the job. A schema change or a slow query on this one endpoint should
+        # not turn the keep-warm red and start mailing about it.
+        run: |
+          curl --silent --show-error \
+               --max-time 60 \
+               --output /dev/null \
+               --write-out 'exams: %{http_code} in %{time_total}s\n' \
+               https://questivo.onrender.com/api/pyq/exams

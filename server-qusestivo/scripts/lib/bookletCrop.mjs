@@ -57,6 +57,47 @@ export class PageImages {
 }
 
 /**
+ * White paper to leave around a crop, in crop-render pixels.
+ *
+ * Six was flush: a descender touched the frame the card draws round the
+ * picture, and the operator could not see whether a boundary had gone wrong or
+ * the glyph simply ended there. It is safe to ask for this much because the
+ * margin is only ever grown into paper that is ALREADY BLANK — see grow() — so
+ * a bigger number buys air and never the next question's first line.
+ */
+export const PAD = 24;
+
+/** Does row `y` carry ink between x0 and x1? One dark pixel is scanner grit. */
+function rowHasInk(img, x0, x1, y) {
+  if (y < 0 || y >= img.height) return false;
+  const base = y * img.stride;
+  let n = 0;
+  for (let x = x0; x < x1; x++) if (img.px[base + x * img.comps] < 200 && ++n > 1) return true;
+  return false;
+}
+
+/** The same question of a column. */
+function colHasInk(img, y0, y1, x) {
+  if (x < 0 || x >= img.width) return false;
+  let n = 0;
+  for (let y = y0; y < y1; y++) if (img.px[y * img.stride + x * img.comps] < 200 && ++n > 1) return true;
+  return false;
+}
+
+/**
+ * Widen [lo, hi) by up to `pad` on each side, stopping at the first ink.
+ *
+ * `blank(i)` answers "is line i clear?", so the same walk does rows and columns.
+ */
+function grow(lo, hi, pad, blank) {
+  let a = lo;
+  let b = hi;
+  for (let k = 0; k < pad && blank(a - 1); k++) a--;
+  for (let k = 0; k < pad && blank(b); k++) b++;
+  return [a, b];
+}
+
+/**
  * The first and last rows of a rectangle that carry any ink.
  *
  * A question's band runs to wherever the NEXT question starts, which on a short
@@ -66,17 +107,52 @@ export class PageImages {
  * the ink is what makes a crop tight enough to read as one question.
  */
 function inkBounds(img, x0, x1, y0, y1) {
-  const hasInk = (y) => {
-    const base = y * img.stride;
-    let n = 0;
-    for (let x = x0; x < x1; x++) if (img.px[base + x * img.comps] < 200 && ++n > 1) return true;
-    return false;
-  };
   let top = y0;
   let bottom = y1 - 1;
-  while (top < bottom && !hasInk(top)) top++;
-  while (bottom > top && !hasInk(bottom)) bottom--;
+  while (top < bottom && !rowHasInk(img, x0, x1, top)) top++;
+  while (bottom > top && !rowHasInk(img, x0, x1, bottom)) bottom--;
   return [top, bottom + 1];
+}
+
+/** The same, across the rectangle's columns. */
+function inkColumns(img, x0, x1, y0, y1) {
+  let left = x0;
+  let right = x1 - 1;
+  while (left < right && !colHasInk(img, y0, y1, left)) left++;
+  while (right > left && !colHasInk(img, y0, y1, right)) right--;
+  return [left, right + 1];
+}
+
+/**
+ * Where to cut between two blocks of text: the middle of the widest run of
+ * blank rows between `from` and `to`.
+ *
+ * A boundary taken from the recogniser's line boxes lands wherever the WORDS
+ * happened to end, and on these papers the tallest ink on a line is regularly
+ * outside them: a stacked exponent, an overbar, an integral sign. GATE 2003's
+ * choice (D) is "d = kv^-1/2" and the recogniser reports only the "2", so a cut
+ * at the line's own top edge sliced the exponent off and left the candidate
+ * reading "d = kv 2" — a different answer to the one the paper printed.
+ *
+ * Blank paper is the one place a cut costs nothing, so the cut goes there.
+ */
+export function cutBetween(images, page, x0, x1, from, to) {
+  const img = images.get(page);
+  const lo = Math.max(0, Math.round(from));
+  const hi = Math.min(img.height, Math.round(to));
+  if (hi - lo < 3) return to;
+
+  let best = null;
+  let start = -1;
+  for (let y = lo; y <= hi; y++) {
+    if (y < hi && !rowHasInk(img, x0, x1, y)) {
+      if (start < 0) start = y;
+    } else if (start >= 0) {
+      if (!best || y - start > best[1] - best[0]) best = [start, y];
+      start = -1;
+    }
+  }
+  return best ? (best[0] + best[1]) / 2 : to;
 }
 
 /**
@@ -85,24 +161,28 @@ function inkBounds(img, x0, x1, y0, y1) {
  * Returns null when there is nothing worth writing, which the caller treats as
  * "this part has no picture" rather than as an error.
  */
-export function stackCrop(images, rects, { minHeight = 18, gap = 10, pad = 6 } = {}) {
+export function stackCrop(images, rects, { minHeight = 18, gap = 10, pad = PAD } = {}) {
   const parts = [];
   for (const r of rects) {
     const img = images.get(r.page);
     const x0 = Math.max(0, Math.round(r.x0));
     const x1 = Math.min(img.width, Math.round(r.x1));
-    let y0 = Math.max(0, Math.round(r.y0));
-    let y1 = Math.min(img.height, Math.round(r.y1));
+    const y0 = Math.max(0, Math.round(r.y0));
+    const y1 = Math.min(img.height, Math.round(r.y1));
     if (x1 - x0 < 8 || y1 - y0 < 4) continue;
 
-    // Tightened to the ink, then given a little air back so the glyphs are not
-    // flush against the edge.
+    // Tightened to the ink on all four sides, then given the margin back. The
+    // trim is what keeps a short choice from being a picture of mostly blank
+    // paper — the boxes run the full width of their column, and a two-word
+    // option sat in a third of a page of white.
     const [inkTop, inkBottom] = inkBounds(img, x0, x1, y0, y1);
     if (inkBottom - inkTop < 2) continue;
-    y0 = Math.max(0, inkTop - pad);
-    y1 = Math.min(img.height, inkBottom + pad);
+    const [inkLeft, inkRight] = inkColumns(img, x0, x1, inkTop, inkBottom);
 
-    parts.push({ img, x0, y0, w: x1 - x0, h: y1 - y0 });
+    const [top, bottom] = grow(inkTop, inkBottom, pad, (y) => !rowHasInk(img, inkLeft, inkRight, y));
+    const [left, right] = grow(inkLeft, inkRight, pad, (x) => !colHasInk(img, top, bottom, x));
+
+    parts.push({ img, x0: left, y0: top, w: right - left, h: bottom - top });
   }
   if (!parts.length) return null;
 
@@ -115,16 +195,16 @@ export function stackCrop(images, rects, { minHeight = 18, gap = 10, pad = 6 } =
   const dStride = out.getStride();
   const dp = out.getPixels();
 
-  let top = 0;
+  let at = 0;
   for (const p of parts) {
     for (let y = 0; y < p.h; y++) {
       const sBase = (p.y0 + y) * p.img.stride;
-      const dBase = (top + y) * dStride;
+      const dBase = (at + y) * dStride;
       for (let x = 0; x < p.w; x++) {
         dp[dBase + x] = p.img.px[sBase + (p.x0 + x) * p.img.comps];
       }
     }
-    top += p.h + gap;
+    at += p.h + gap;
   }
 
   const png = out.asPNG();

@@ -449,7 +449,8 @@ export function findOptionMarks(page, fromY, toY) {
     if (line.y < fromY || line.y > toY) continue;
     for (let i = 0; i < line.words.length; i++) {
       const w = line.words[i];
-      const m = OPT_MARK.exec(w.text.trim());
+      const text = w.text.trim();
+      const m = OPT_MARK.exec(text);
       if (!m) continue;
       // A label OPENS its choice: either the line, or a column within it. A
       // stray "(A)" inside prose — "as shown in (a)" — has text hard against
@@ -459,6 +460,12 @@ export function findOptionMarks(page, fromY, toY) {
       if (prev && gap < w.h * 0.8) continue;
       out.push({
         label: m[1].toUpperCase(),
+        // Whether the brackets were actually read. OPT_MARK allows a bare
+        // letter because the recogniser loses them, but on a metallurgy paper
+        // a bare letter is far more often a VARIABLE — "d = kv" reads as a
+        // fourth choice sitting inside the second one. optionBoxes() uses this
+        // to prefer the labels the page really printed.
+        bracketed: text.startsWith("("),
         x: w.x,
         y: line.y,
         bottom: line.bottom,
@@ -478,10 +485,56 @@ export function findOptionMarks(page, fromY, toY) {
  * crop, which the renderer and the importer both already handle. Guessing a
  * boundary here would cut a choice in half.
  */
-export function optionBoxes(marks, page, bandBottom) {
-  const picked = ["A", "B", "C", "D"].map((L) => marks.find((m) => m.label === L));
-  if (!picked.every(Boolean)) return null;
+export function optionBoxes(marks, page, bandBottom, cut = (from, to) => to - 4) {
+  // One list of candidates per letter, because a letter can be found more than
+  // once: "(D)" is printed, and the "d" in "d = kv" reads as another. Where the
+  // page shows brackets on all four choices the bare readings are noise and go.
+  const letters = ["A", "B", "C", "D"];
+  const candidates = letters.map((L) => marks.filter((m) => m.label === L));
+  if (candidates.every((list) => list.some((m) => m.bracketed))) {
+    for (const list of candidates) {
+      const keep = list.filter((m) => m.bracketed);
+      list.length = 0;
+      list.push(...keep);
+    }
+  }
+  if (!candidates.every((list) => list.length)) return null;
 
+  // Then the combination that reads as a question does: A, then B, then C, then
+  // D, left to right and down the page. Taking the first of each letter instead
+  // — which is what this did — accepted A B D C on GATE 2003's question 3, and
+  // the column boundaries drawn from that order gave B a 50-pixel sliver and put
+  // both C and D inside C's picture.
+  //
+  // Three candidates a letter is already more than any page has produced; the
+  // cap is there so a badly recognised page cannot turn this into a search.
+  const trimmed = candidates.map((list) => list.slice(0, 3));
+  for (const picked of combinations(trimmed)) {
+    const boxes = gridBoxes(picked, page, bandBottom, cut);
+    if (boxes) return boxes;
+  }
+  return null;
+}
+
+/** Every way of taking one item from each list, first items first. */
+function* combinations(lists) {
+  const idx = lists.map(() => 0);
+  for (;;) {
+    yield idx.map((i, k) => lists[k][i]);
+    let k = lists.length - 1;
+    while (k >= 0 && ++idx[k] >= lists[k].length) idx[k--] = 0;
+    if (k < 0) return;
+  }
+}
+
+/**
+ * Four chosen labels as rectangles, or null if they do not form a grid.
+ *
+ * `cut(from, to)` picks the horizontal seam between two blocks of text; the
+ * caller supplies one that looks at the paper, so a boundary lands in white
+ * space rather than through an exponent. See cutBetween() in bookletCrop.mjs.
+ */
+function gridBoxes(picked, page, bandBottom, cut) {
   // These booklets set four choices in whichever arrangement fits the page:
   // one per line, two-by-two, or all four across a single line. Rather than
   // testing for each shape, the labels are gathered into rows and the grid is
@@ -505,12 +558,64 @@ export function optionBoxes(marks, page, bandBottom) {
   if (!rows.every((r) => r.items.length === perRow)) return null;
   if (![1, 2, 4].includes(perRow)) return null;
 
+  // And they must read A, B, C, D in that order. A grid whose labels come out
+  // in any other order is not four choices, it is four things that looked like
+  // labels, and cutting it produces four wrong pictures rather than none.
+  const order = rows.flatMap((r) => r.items.map((m) => m.label)).join("");
+  if (order !== "ABCD") return null;
+
+  // Each row is bounded by the blank paper above and below it, found from the
+  // block that precedes it on the page rather than from its own line box.
+  const lines = groupLines(page).sort((a, b) => a.y - b.y);
+  const normal = normalLineGap(page);
+  // Type set high above the baseline — a stacked exponent, an overbar — comes
+  // back from the recogniser as a line of its own. It belongs to the choice
+  // below it, so the seam has to go ABOVE it: GATE 2003's (D) is printed
+  // "d = kv^-1/2" with the -1/2 stacked, and a seam under the exponent
+  // published "d = kv 2" while the -1 drifted into the stem's picture.
+  //
+  // Three things say fragment rather than line, and all are required, because
+  // where the choices are set one per line the line above a choice IS a choice
+  // and absorbing it collapses both to nothing: it sits closer than the page's
+  // own line spacing, it is a word or two rather than a sentence, and it does
+  // not open a choice of its own.
+  const isFragment = (l, below) =>
+    normal > 0 &&
+    below - l.y < normal &&
+    l.words.length <= 3 &&
+    !OPT_MARK.test(l.words[0].text.trim());
+
+  const seamAbove = (row) => {
+    let y = Math.min(...row.items.map((m) => m.y));
+    for (;;) {
+      const prev = lines.filter((l) => l.y < y - 1).pop();
+      if (!prev || !isFragment(prev, y)) break;
+      y = prev.y;
+    }
+    const above = lines.filter((l) => l.bottom <= y + 2).pop();
+    return cut(above ? above.bottom : y - 14, y);
+  };
+
   const out = {};
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     const next = rows[i + 1];
-    const top = Math.min(...row.items.map((m) => m.y)) - 4;
-    const bottom = next ? Math.min(...next.items.map((m) => m.y)) - 4 : bandBottom;
+    const top = seamAbove(row);
+
+    // The last row ends where its own text does, NOT at the foot of the
+    // question. A note printed under the choices — "where 'k' is a constant" —
+    // belongs to the question, and running the row to the band's bottom put it
+    // inside the leftmost choice's picture, making that choice read as
+    // something the paper did not offer. The stem carries it instead; see
+    // convertGateBooklet.mjs.
+    let bottom;
+    if (next) {
+      bottom = seamAbove(next);
+    } else {
+      const ends = blockBottom(page, Math.min(...row.items.map((m) => m.y)), bandBottom);
+      const after = lines.find((l) => l.y >= ends);
+      bottom = cut(ends - 4, after ? Math.min(after.y, bandBottom) : bandBottom);
+    }
     if (bottom - top < 6) return null;
 
     for (let j = 0; j < row.items.length; j++) {
@@ -525,6 +630,42 @@ export function optionBoxes(marks, page, bandBottom) {
   }
 
   return ["A", "B", "C", "D"].every((L) => out[L]) ? out : null;
+}
+
+/**
+ * The page's ordinary line spacing.
+ *
+ * The median, so the paragraph gaps it is used to detect cannot inflate it.
+ */
+export function normalLineGap(page) {
+  const lines = groupLines(page).sort((a, b) => a.y - b.y);
+  if (lines.length < 3) return 0;
+  const gaps = [];
+  for (let i = 1; i < lines.length; i++) gaps.push(lines[i].y - lines[i - 1].y);
+  gaps.sort((a, b) => a - b);
+  return gaps[Math.floor(gaps.length / 2)] || 0;
+}
+
+/**
+ * Where the block of text starting at `fromY` stops, at the latest `limit`.
+ *
+ * A block runs on through lines set at the page's own spacing and ends at the
+ * first paragraph gap — the same test question anchors use, for the same
+ * reason: these booklets separate blocks with space and nothing else.
+ */
+export function blockBottom(page, fromY, limit) {
+  const lines = groupLines(page)
+    .sort((a, b) => a.y - b.y)
+    .filter((l) => l.y >= fromY - 2 && l.y <= limit);
+  if (!lines.length) return limit;
+
+  const normal = normalLineGap(page);
+  let bottom = lines[0].bottom;
+  for (let i = 1; i < lines.length; i++) {
+    if (normal && lines[i].y - lines[i - 1].y > normal * 1.35) break;
+    bottom = lines[i].bottom;
+  }
+  return Math.min(limit, bottom + 4);
 }
 
 /* ------------------------------- solutions ------------------------------ */

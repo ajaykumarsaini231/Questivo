@@ -52,7 +52,7 @@ import {
   HEADER_FRAC,
   FOOTER_FRAC,
 } from "./lib/bookletAnchors.mjs";
-import { PageImages, stackCrop, spanRects, marginRuns } from "./lib/bookletCrop.mjs";
+import { PageImages, stackCrop, spanRects, marginRuns, cutBetween } from "./lib/bookletCrop.mjs";
 import { tagTopic } from "../src/lib/topicTagger.js";
 
 /* ------------------------------- constants ------------------------------ */
@@ -388,6 +388,16 @@ async function main() {
         daySlot: null,
       };
 
+      // Every boundary this converter cuts on is a y just above a line of text,
+      // and taking a fixed offset for "just above" is what slices the top off a
+      // stacked exponent or leaves a descender from the line before. This puts
+      // the cut in the blank paper instead, which is where it costs nothing.
+      const seamAt = (list, index, y) => {
+        const p = list.find((q) => q.index === index);
+        if (!p) return y - 6;
+        return Math.min(cutBetween(images, index, 0, p.width, y - 40, y), y - 6);
+      };
+
       let cut = 0;
       const oversized = [];
       for (let n = 1; n <= last; n++) {
@@ -400,7 +410,7 @@ async function main() {
         // Where this question ends: the next question's number, or — for the
         // last one on the paper — the foot of its own page.
         const endsAt = next
-          ? { page: next.page, y: next.y - 6 }
+          ? { page: next.page, y: seamAt(paperPages, next.page, next.y) }
           : { page: a.page, y: page.height * FOOTER_FRAC };
 
         const base = `GATE_MT_${year}_Q${String(n).padStart(2, "0")}`;
@@ -414,7 +424,9 @@ async function main() {
         const bandBottom =
           endsAt.page === a.page ? endsAt.y : page.height * FOOTER_FRAC;
         const marks4 = findOptionMarks(page, a.y + 6, bandBottom);
-        const boxes = optionBoxes(marks4, page, bandBottom);
+        const boxes = optionBoxes(marks4, page, bandBottom, (from, to) =>
+          cutBetween(images, a.page, 0, page.width, from, to)
+        );
 
         // The stem runs from the question number to its first option, across
         // however many pages that takes.
@@ -424,27 +436,36 @@ async function main() {
             ? { page: a.page, y: firstOption }
             : endsAt;
 
+        // Anything printed BELOW the choices is the question's too — "where 'k'
+        // is a constant", a units note, the data a numerical part refers back
+        // to. It has nowhere else to go: attached to a choice it makes that
+        // choice read as something the paper never offered, and dropped it
+        // takes the definition of a symbol with it. So it is stacked under the
+        // stem, which is where a candidate reads it.
+        const optionsBottom = boxes
+          ? Math.max(...["A", "B", "C", "D"].map((L) => boxes[L][3]))
+          : null;
+        const tail =
+          optionsBottom !== null && endsAt.page === a.page && endsAt.y - optionsBottom > 12
+            ? [{ page: a.page, x0: 0, y0: optionsBottom, x1: page.width, y1: endsAt.y }]
+            : [];
+
+        const startY = seamAt(paperPages, a.page, a.y);
+
         // A stem taller than a page and a half is not a long question, it is a
         // boundary that went wrong — an anchor matched something that is not a
         // question, and the crop ran on until the next real one. GATE 2010's
         // question 10 came out as the instructions page, the Useful Data table
         // and questions 1 to 10 in one picture before this check existed.
         // Refuse it rather than show a candidate ten questions at once.
-        const stemSpan = spanRects(paperPages, { page: a.page, y: a.y - 6 }, stemEnd);
+        const stemSpan = spanRects(paperPages, { page: a.page, y: startY }, stemEnd);
         const stemHeight = stemSpan.reduce((s, r) => s + (r.y1 - r.y0), 0);
         if (stemHeight > page.height * 1.5) {
           oversized.push(n);
           continue;
         }
 
-        const stemPng = stackCrop(images, stemSpan);
-        let stemName = null;
-        if (stemPng) {
-          stemName = `${base}_Q.png`;
-          fs.writeFileSync(path.join(figDir, stemName), stemPng);
-        }
-
-        // The four choices, each cut to its own box. Written only when all four
+        // The four choices, each cut to its own box. Kept only when all four
         // came out: three beside a blank fourth reads as a question with three
         // choices, which is a different question.
         const optionFiles = {};
@@ -458,15 +479,24 @@ async function main() {
             optionFiles[L] = name;
           }
         }
-        if (Object.keys(optionFiles).length !== 4) {
+        const cutOptions = Object.keys(optionFiles).length === 4;
+        if (!cutOptions) {
           for (const name of Object.values(optionFiles)) {
             fs.rmSync(path.join(figDir, name), { force: true });
           }
           for (const k of Object.keys(optionFiles)) delete optionFiles[k];
-          // The stem must then carry the choices, so re-cut it over the whole
-          // question rather than stopping above where the first option was.
-          const whole = stackCrop(images, spanRects(paperPages, { page: a.page, y: a.y - 6 }, endsAt));
-          if (whole && stemName) fs.writeFileSync(path.join(figDir, stemName), whole);
+        }
+
+        // The stem: up to the first choice when the choices were cut out
+        // separately, and over the whole question when they were not, because
+        // then the picture has to carry them.
+        const stemPng = cutOptions
+          ? stackCrop(images, [...stemSpan, ...tail])
+          : stackCrop(images, spanRects(paperPages, { page: a.page, y: startY }, endsAt));
+        let stemName = null;
+        if (stemPng) {
+          stemName = `${base}_Q.png`;
+          fs.writeFileSync(path.join(figDir, stemName), stemPng);
         }
 
         /* --------------------------- solution --------------------------- */
@@ -480,7 +510,7 @@ async function main() {
           answer = sol.answer;
           const solPage = solPages.find((p) => p.index === sol.page);
           const solEnd = solNext
-            ? { page: solNext.page, y: solNext.y - 6 }
+            ? { page: solNext.page, y: seamAt(solPages, solNext.page, solNext.y) }
             : solPage
               ? { page: sol.page, y: solPage.height * FOOTER_FRAC }
               : null;
@@ -491,7 +521,7 @@ async function main() {
           if (solEnd && solEnd.page - sol.page <= 2) {
             const png = stackCrop(
               images,
-              spanRects(solPages, { page: sol.page, y: sol.y - 6 }, solEnd)
+              spanRects(solPages, { page: sol.page, y: seamAt(solPages, sol.page, sol.y) }, solEnd)
             );
             if (png) {
               solutionName = `${base}_S.png`;
