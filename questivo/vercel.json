@@ -37,8 +37,36 @@
   ],
   "rewrites": [
     {
+      "source": "/api/auth/me",
+      "destination": "https://server-qusestivo.vercel.app/api/auth/me"
+    },
+    {
+      "source": "/api/auth/:path*",
+      "destination": "https://questivo.onrender.com/api/auth/:path*"
+    },
+    {
+      "source": "/api/admin/:path*",
+      "destination": "https://questivo.onrender.com/api/admin/:path*"
+    },
+    {
+      "source": "/api/interview/:path*",
+      "destination": "https://questivo.onrender.com/api/interview/:path*"
+    },
+    {
+      "source": "/api/resume/:path*",
+      "destination": "https://questivo.onrender.com/api/resume/:path*"
+    },
+    {
+      "source": "/api/pyq/practice/generate",
+      "destination": "https://questivo.onrender.com/api/pyq/practice/generate"
+    },
+    {
+      "source": "/api/pyq/:id/solution",
+      "destination": "https://questivo.onrender.com/api/pyq/:id/solution"
+    },
+    {
       "source": "/api/:path*",
-      "destination": "https://questivo.onrender.com/api/:path*"
+      "destination": "https://server-qusestivo.vercel.app/api/:path*"
     },
     {
       "source": "/tests/:path*",
