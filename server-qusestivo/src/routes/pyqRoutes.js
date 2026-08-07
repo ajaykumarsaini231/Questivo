@@ -1,6 +1,7 @@
 import express from "express";
 import rateLimit from "express-rate-limit";
 import optionalAuth, { optionalUser } from "../middleware/optionalAuth.js";
+import { protect } from "../middleware/authMiddleware.js";
 import {
   getPyqCoverage,
   getPyqTopics,
@@ -24,6 +25,56 @@ import {
 } from "../controllers/pyqController.js";
 
 const router = express.Router();
+
+/**
+ * WHAT IS PUBLIC HERE AND WHAT IS NOT
+ *
+ * This archive is 9,102 questions, and every one of them used to be readable by
+ * anyone who could write a for-loop: listPyqs pages 50 at a time, so the whole
+ * bank was ~180 unauthenticated requests. Rate limiting alone could not answer
+ * that, and on the Vercel copy of this server it answers nothing at all —
+ * express-rate-limit counts in memory, and every serverless instance starts
+ * with its own empty counter.
+ *
+ * So the line is drawn at content rather than at traffic:
+ *
+ *   PUBLIC — which exams exist, what filters they support, how many questions
+ *   match, the pattern of a full test, the list of papers. All of it is
+ *   metadata, none of it is a question, and the prerendered /pyq and geo
+ *   landing pages need it to stay indexable. Crawlers keep working.
+ *
+ *   SIGNED IN — the questions themselves: the paged list, a whole paper, a
+ *   generated mock, and any solution. Scraping these now costs an account,
+ *   and an account is a thing that can be rate-limited, quota'd and banned.
+ *
+ * `protect` and not `optionalAuth` + a hand-rolled check: server.js mounts a
+ * JSON error handler (the four-argument one at the bottom), so an AppError from
+ * protect comes back as {success:false, message, error} with the right status.
+ * The note further down about 401s arriving as HTML predates that handler.
+ */
+
+/**
+ * `protect`, with a refusal a candidate can read.
+ *
+ * protect answers "Not authorized, token missing", which is the truth and is
+ * useless on screen: lib/pyq.ts surfaces the body's `error` straight into the
+ * page's error state, so a signed-out visitor browsing the archive would have
+ * been told about a missing token. Only the 401 body is rewritten — the
+ * signature check, the deleted-account lookup and every other status come
+ * from protect unchanged, so there is no second copy of the auth rules here.
+ *
+ * The {error, signedIn} shape matches requireCandidate in pyqController, which
+ * the history endpoints already answer with, so the client sees one shape for
+ * "you need an account" across this whole router.
+ */
+const gate = (message) => (req, res, next) =>
+  protect(req, res, (err) => {
+    if (!err) return next();
+    if (err?.statusCode === 401) {
+      return res.status(401).json({ error: message, signedIn: false });
+    }
+    return next(err);
+  });
 
 /**
  * Solutions and course requests are the only endpoints here that cost anything
@@ -88,8 +139,10 @@ router.get("/attempts/:attemptId", optionalAuth, getMyAttempt);
 
 // Whole-paper archive. Declared before "/:id/solution" so "papers" is never
 // matched as a question id.
+// The list stays public — titles, years and question counts are the catalogue,
+// and the papers page has to be indexable. Opening one is the content.
 router.get("/papers", listPyqPapers);
-router.get("/papers/:paperId", getPyqPaper);
+router.get("/papers/:paperId", gate("Sign in to open this paper."), getPyqPaper);
 // optionalAuth, not requireAuth: sitting a paper without an account still has
 // to work — that is the point of a free PYQ dashboard. But the browser already
 // sends its session cookie here (credentials: "include"), and without this
@@ -104,18 +157,26 @@ router.post("/papers/:paperId/score", optionalUser, scorePyqPaper);
 // The GET form is the original zero-argument draw and is kept because the
 // player still links to it; POST carries a full spec — subjects, chapters,
 // years, difficulty, distribution.
-router.get("/practice/generate", generateLimiter, generateMockPaper);
+// A generated paper is drawn from the same question bank, so leaving it open
+// would have handed a scraper the archive by another door — and a wider one,
+// since a spec-driven POST can ask for whole chapters at a time. `protect`
+// runs before the limiter: a request with no token is refused on a signature
+// check, without a database read and without spending limiter budget.
+router.get("/practice/generate", gate("Sign in to generate a practice paper."), generateLimiter, generateMockPaper);
 router.get("/generate/options", getGeneratorOptions);
 // The official pattern of every full-length paper, plus whether the archive can
 // currently fill it. Read before the Full Test card renders.
 router.get("/full-tests", listFullTests);
-router.post("/generate", generateLimiter, generateMockPaper);
+router.post("/generate", gate("Sign in to generate a practice paper."), generateLimiter, generateMockPaper);
 // optionalAuth for the same reason as the paper scorer: a signed-in candidate's
 // generated paper lands in their history, an anonymous one is still scored.
 router.post("/practice/score", optionalUser, scoreQuestionSet);
 
-router.get("/", listPyqs);
-router.get("/:id/solution", solutionLimiter, getPyqSolution);
+// The two that mattered most. listPyqs is the bulk read — 50 rows a call, the
+// whole archive in a few minutes — and a solution costs a model call, so an
+// open one is someone else's compute bill as much as it is our content.
+router.get("/", gate("Sign in to browse previous year questions."), listPyqs);
+router.get("/:id/solution", gate("Sign in to see the full solution."), solutionLimiter, getPyqSolution);
 
 router.post("/course-request", requestLimiter, optionalUser, createCourseRequest);
 router.get("/course-request", listCourseRequests);
