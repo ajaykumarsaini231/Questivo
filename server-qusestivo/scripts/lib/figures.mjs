@@ -1468,6 +1468,53 @@ export function extractFigures({ pdfPath, outDir, wanted, mode, fullWidth = fals
       const sol = solutions
         .filter((s) => s.page === a.page && s.y > a.y && sameColumn(s))
         .sort((p, q) => p.y - q.y)[0];
+
+      /**
+       * The solution that starts overleaf.
+       *
+       * A booklet sets a question near the foot of a page and its worked
+       * solution on the next one, which is ordinary typesetting rather than an
+       * edge case: in ALLEN's 2025 Physics paper it happened to five of sixteen
+       * questions, and every one of them came back with no solution image at
+       * all because the search above never left the anchor's page.
+       *
+       * Bounded by the next question, so this can only ever pick up the
+       * solution belonging to this one. Stems already do exactly this - see
+       * `continuation` - and this reuses the same span writer.
+       */
+      if (!sol) {
+        const lastPage = nextQ ? nextQ.page : a.page + 1;
+        let head = null;
+        for (let p = a.page + 1; p <= lastPage && !head; p += 1) {
+          head = solutions
+            .filter((s) => s.page === p && (!nextQ || nextQ.page !== p || s.y < nextQ.y))
+            .sort((x, y) => x.y - y.y)[0] ?? null;
+        }
+
+        if (head) {
+          const regions = [];
+          for (let p = head.page; p <= (nextQ ? nextQ.page : head.page); p += 1) {
+            const top = p === head.page ? Math.max(0, head.y - PAD) : HEADER_PT;
+            const bottom = nextQ && nextQ.page === p
+              ? Math.min(nextQ.y - 2, contentBottom(p, a.pageH))
+              : contentBottom(p, a.pageH);
+            if (bottom - top < MIN_HEIGHT_PT) continue;
+            regions.push({ page: pageAt(p), rect: [colX0, top, colX1, bottom] });
+          }
+
+          if (regions.length) {
+            mine.solution = regions.length === 1
+              ? write(`${w.baseName}_S.png`, regions[0].rect)
+              : writeSpan(`${w.baseName}_S.png`, regions);
+            mine.solutionInk = classifyRegion(
+              drawingsFor(head.page, pageAt(head.page)),
+              regions[0].rect,
+              { pageW: a.pageW, pageH: a.pageH, text: w.solutionText ?? "" },
+            );
+          }
+        }
+      }
+
       if (sol) {
         // The next question, only where it is on this page: `nextQ` now looks
         // ahead in reading order, and comparing an overleaf y against this

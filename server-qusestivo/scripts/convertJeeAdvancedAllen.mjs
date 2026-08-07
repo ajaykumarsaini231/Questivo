@@ -41,6 +41,7 @@ import process from "node:process";
 import crypto from "node:crypto";
 
 import { extractLines } from "./lib/pdfLayout.mjs";
+import { extractColumnLines } from "./lib/columnText.mjs";
 import { extractFigures } from "./lib/figures.mjs";
 
 /* ------------------------------- constants ------------------------------ */
@@ -142,6 +143,53 @@ function readSection(lines) {
     partial: /Partial\s*Marks/i.test(t),
     sectionMaxMarks: maxMark ? Number(maxMark[1]) : null,
   };
+}
+
+/**
+ * Splits a question number that an answer line was welded through.
+ *
+ * The booklet prints the previous question's answer in the left column at very
+ * nearly the same height as the next question's number, and the column reader
+ * emits them as one line with the number torn in half around it:
+ *
+ *   "1Ans. (11.80) 0. A hydrogen atom, initially at rest in its ground state…"
+ *
+ * That is question 10, and it was silently lost: the line does not begin with
+ * "10.", so no question start was seen, and the whole question - stem, options,
+ * key, solution - never entered the output. ALLEN's 2025 Physics paper yielded
+ * 15 of its 16 questions for exactly this reason, with no warning.
+ *
+ * Lifting the answer block out rejoins the digits ("1" + "0.") and both halves
+ * survive as their own lines. Deliberately narrow: it fires only on digits,
+ * then an `Ans. (…)`, then digits and a dot - a shape nothing but this welding
+ * produces, and one that would be meaningless in ordinary prose.
+ */
+function unweldAnswerLines(lines) {
+  const WELD = /^(\d{1,2})\s*(Ans\.\s*\([^)]*\))\s*(\d{1,2}\s*\..*)$/;
+  const out = [];
+
+  for (const raw of lines) {
+    const line = typeof raw === "string" ? raw : raw?.text ?? "";
+    const m = WELD.exec(line.trim());
+    if (m) {
+      /**
+       * The question first, then the answer.
+       *
+       * ALLEN prints "Ans." *below* the question it answers, and `answerIndex`
+       * attributes an answer to the last number it has seen - so emitting the
+       * answer first hands it to the previous question. That is not academic:
+       * `Ans. (11.80)` belongs to question 10, and with the order reversed it
+       * was offered to question 9, which already had `1.66 to 1.67` and
+       * ignored it. Question 10 came out with no key at all.
+       */
+      out.push(`${m[1]}${m[3]}`);
+      out.push(m[2]);
+      continue;
+    }
+    out.push(raw);
+  }
+
+  return out;
 }
 
 /* ------------------------------- parsing -------------------------------- */
@@ -419,7 +467,23 @@ async function main() {
   for (const d of usable) {
     let parsed, printedAnswers;
     try {
-      const lines = await extractLines(fs.readFileSync(path.join(dir, d.file)));
+      /**
+       * Column-aware, because these booklets are two-up.
+       *
+       * `extractLines` reads in glyph order and welds the two columns together.
+       * That is not cosmetic: it tore question 10's number in half around the
+       * previous answer so the question was lost entirely, and it renders the
+       * worked solutions as interleaved nonsense —
+       * "Hzseeercroteioew+nlese catArrBiecanadsfisCeulDmd" is one sentence from
+       * each column, letter by letter.
+       *
+       * `extractLines` stays where the other ten converters use it; this one
+       * opts in. `unweldAnswerLines` is kept behind it as a belt — the column
+       * split makes that particular weld unreachable here, but it costs nothing
+       * on clean input and the rest of the booklet set has not been re-run.
+       */
+      const buffer = fs.readFileSync(path.join(dir, d.file));
+      const lines = unweldAnswerLines(extractColumnLines(buffer));
       parsed = parseBooklet(lines);
       printedAnswers = answerIndex(lines.map((l) => (typeof l === "string" ? l : l?.text ?? "")));
     }
