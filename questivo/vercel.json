@@ -49,6 +49,10 @@
       "destination": "https://questivo.onrender.com/api/admin/:path*"
     },
     {
+      "source": "/api/tests/:path*",
+      "destination": "https://questivo.onrender.com/api/tests/:path*"
+    },
+    {
       "source": "/api/interview/:path*",
       "destination": "https://questivo.onrender.com/api/interview/:path*"
     },
