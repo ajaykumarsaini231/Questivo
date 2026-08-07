@@ -133,11 +133,12 @@ const Header: React.FC = () => {
     api
       .get("/api/auth/me")
       .then((res) => {
-        console.log("ME API USER:", res.data.user);
+        // The user object is not logged. It carries name, email and role, and
+        // this runs on every page load, so the console held the signed-in
+        // account's details on every screen the site was ever open on.
         setUser(res.data.user);
       })
-      .catch((err) => {
-        console.error("ME API ERROR:", err.response?.status);
+      .catch(() => {
         setUser(null);
       });
   }, []);

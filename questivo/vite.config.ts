@@ -1,11 +1,24 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [react()],
   optimizeDeps: {
     exclude: ['@ricky0123/vad-web', 'onnxruntime-web']
   },
+  // Strip every console call and debugger statement from the shipped bundle.
+  //
+  // Header.tsx logged the whole /api/auth/me user object on every page load, so
+  // anyone who opened DevTools on any page — their own or someone else's screen
+  // over their shoulder — read the signed-in account's name, email and role out
+  // of the console. That one is deleted at the source, but deleting call sites
+  // one at a time only fixes the ones that exist today; the next debugging
+  // console.log someone leaves in ships to production the same way.
+  //
+  // Dropped at build only. `vite dev` keeps every console call, because the
+  // point is to keep debugging output out of the artefact strangers download,
+  // not out of the developer's own terminal.
+  esbuild: mode === 'production' ? { drop: ['console', 'debugger'] } : {},
   // Mirror the production setup: in prod, vercel.json rewrites /api/* to the
   // Render backend so the API is SAME-ORIGIN with the site. That matters for
   // auth — the session cookie is SameSite=None cross-site, which browsers now
@@ -53,4 +66,4 @@ export default defineConfig({
     // The entry chunk should stay small now; warn early if that regresses.
     chunkSizeWarningLimit: 400,
   },
-});
+}));

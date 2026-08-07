@@ -26,9 +26,26 @@ const adapter = new PrismaPg(pool);
 // Global instance to prevent connection exhaustion in development
 const globalForPrisma = globalThis;
 
-export const prisma = globalForPrisma.prisma || new PrismaClient({ 
+/**
+ * Query logging is a development tool, and it was on in production.
+ *
+ * "query" prints every statement this server runs, parameters included, to
+ * stdout — which on Render and on Vercel is a retained, searchable log stream
+ * that anyone with dashboard access can read. Every OTP written, every email
+ * looked up, every session row went through it. It is the same mistake as
+ * printing a session token, at a larger volume.
+ *
+ * Warnings and errors stay: those are the lines someone actually needs when
+ * this misbehaves at 2am, and they do not carry row data.
+ */
+const logLevels =
+  process.env.NODE_ENV === "production"
+    ? ["warn", "error"]
+    : ["query", "info", "warn", "error"];
+
+export const prisma = globalForPrisma.prisma || new PrismaClient({
   adapter,
-  log: ["query", "info", "warn", "error"]
+  log: logLevels
 });
 
 if (process.env.NODE_ENV !== "production") {
