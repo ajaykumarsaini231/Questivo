@@ -69,12 +69,32 @@ jobs:
                https://questivo.onrender.com/
 
       - name: Warm the database pool
-        # Not --fail: the process is already up by here, which is the point of
-        # the job. A schema change or a slow query on this one endpoint should
-        # not turn the keep-warm red and start mailing about it.
+        # Retried, because one attempt does not warm anything. Run #1 got a 500
+        # here off an already-warm Render — the process was up, so what was cold
+        # was the Postgres end: the provider suspends an idle free compute and
+        # pg.Pool hands the next caller the connection that died with it, which
+        # fails once and works from then on. A single request that eats that
+        # failure leaves the pool exactly as cold as it found it, and hands the
+        # 500 to the next real visitor instead. curl retries 500 natively.
+        #
+        # The body is kept rather than sent to /dev/null. listExams answers
+        # `{ error: err.message }` on 500, so the one thing that identifies the
+        # fault was being discarded, and run #1 could only say that something
+        # went wrong.
+        #
+        # A warning, not a failure. Render is warm by this point, which is this
+        # job's actual purpose, so a red X would misreport a working keep-warm
+        # as a broken one — but a green tick with a 500 buried in the log is how
+        # this went unnoticed the first time. ::warning:: puts it on the run
+        # summary without mailing about it.
         run: |
-          curl --silent --show-error \
-               --max-time 60 \
-               --output /dev/null \
-               --write-out 'exams: %{http_code} in %{time_total}s\n' \
-               https://questivo.onrender.com/api/pyq/exams
+          code=$(curl --silent --show-error \
+                      --retry 2 --retry-delay 5 \
+                      --max-time 60 \
+                      --output /tmp/exams.json \
+                      --write-out '%{http_code}' \
+                      https://questivo.onrender.com/api/pyq/exams)
+          echo "exams: $code"
+          if [ "$code" != "200" ]; then
+            echo "::warning title=DB pool was cold::exams returned $code — $(head -c 300 /tmp/exams.json)"
+          fi
